@@ -1,7 +1,5 @@
 <div align="center">
 
-<img src="web/logo.svg" alt="EdgeMinute" height="72">
-
 # 密纪 · EdgeMinute
 
 **会议不上云，纪要不外传。**
