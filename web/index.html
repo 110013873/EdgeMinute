@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>密纪 EdgeMinute · 会议不上云，纪要不外传</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="app">
+    <div class="main-row">
+      <!-- 左：历史会议记录 -->
+      <aside class="history-panel" id="historyPanel">
+        <div class="hp-header">
+          <div class="brand">
+            <img src="/logo.svg" alt="密纪 EdgeMinute">
+            <div class="brand-text">
+              <h1>密纪 <span class="brand-en">EdgeMinute</span></h1>
+              <p class="sub">会议不上云，纪要不外传。</p>
+            </div>
+          </div>
+        </div>
+        <div class="hp-toolbar">
+          <div class="hp-search">
+            <span class="hp-search-ic">🔍</span>
+            <input type="text" id="historySearch" placeholder="搜索历史会议…" autocomplete="off">
+          </div>
+          <button class="hp-new" id="historyNewBtn" title="新建会议（清空当前工作区）">＋ 新建</button>
+        </div>
+        <div class="hp-list" id="historyList">
+          <p class="hp-empty" id="historyEmpty">暂无历史会议<br>转写完成后会自动保存到这里</p>
+        </div>
+      </aside>
+
+      <!-- 空态：未建档时显示，引导用户新建会议 -->
+      <section class="empty-state" id="emptyState">
+        <div class="es-inner">
+          <svg class="es-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+          <h2>新建一场会议</h2>
+          <p>先填写会议议程信息（或导入议程 Word）完成建档，再上传录音并转写。</p>
+          <div class="es-features">
+            <div class="es-feat">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/><circle cx="12" cy="16" r="1"/></svg>
+              <span><b>安全保密</b><em>纯本地内网部署模式，所有音频、转写数据均留存内网环境，数据不出域，充分保障涉密内部会议的数据安全。</em></span>
+            </div>
+            <div class="es-feat">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="8" y1="18" x2="16" y2="18"/><line x1="12" y1="22" x2="12" y2="18"/></svg>
+              <span><b>声纹比对</b><em>内置说话人分离能力，对接声纹库，可自动区分不同发言人，并直接标注参会人真实姓名。</em></span>
+            </div>
+            <div class="es-feat">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2"/><line x1="12" y1="22" x2="12" y2="15.5"/><polyline points="22 8.5 12 15.5 2 8.5"/></svg>
+              <span><b>热词定制</b><em>支持导入自定义业务高频热词库，优化行业术语、专有名词的识别效果。</em></span>
+            </div>
+            <div class="es-feat">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+              <span><b>议程解析</b><em>支持导出会议议程，可对议程进行智能议程解析，自动提取会议关键内容。</em></span>
+            </div>
+            <div class="es-feat">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+              <span><b>纪要生成</b><em>一键生成结构化会议纪要，萃取议题、发言要点、决议、待办等关键信息，会议纪要模板可定制。</em></span>
+            </div>
+            <div class="es-feat">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              <span><b>超长会议</b><em>支持超长会议录音处理，多段录音文件统一归档管理，方便历史会议回溯查阅。</em></span>
+            </div>
+            <div class="es-feat">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              <span><b>内容校对</b><em>录音转写文本支持可视化编辑、人工校对，可对识别错误内容进行修正。</em></span>
+            </div>
+            <div class="es-feat">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              <span><b>智能问答</b><em>基于本次会议全部内容实现本地 AI 智能问答，可针对会议内容进行查询、摘要、信息检索。</em></span>
+            </div>
+          </div>
+          <button class="es-new" id="emptyNewBtn">＋ 新建会议</button>
+        </div>
+      </section>
+
+      <!-- 工作区：已建档后显示（中栏 + 右栏） -->
+      <div class="workspace" id="workspace" hidden>
+      <!-- 中：录音上传 / 会议议程（Tab 切换） -->
+      <section class="center-panel">
+        <div class="center-tabs">
+          <button class="ctab active" data-ctab="upload">
+            <svg class="ctab-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            <span>会议录音</span>
+          </button>
+          <button class="ctab" data-ctab="agenda">
+            <svg class="ctab-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="14" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>
+            <span>会议议程</span>
+          </button>
+        </div>
+
+        <!-- 中·Tab1：录音上传 -->
+        <div class="ctab-pane" id="ctabUpload">
+          <div class="dropzone" id="dropzone">
+            <p class="main">点击或拖拽音频文件到此处</p>
+            <p class="hint">支持多选，wav / mp3 / mp4 等常见音视频格式</p>
+            <input type="file" id="fileInput" accept="audio/*,video/*" multiple>
+          </div>
+          <div class="file-list" id="fileList"></div>
+          <div class="center-footer">
+            <button class="btn-all" id="runAllBtn" disabled>全部转写</button>
+          </div>
+        </div>
+
+        <!-- 中·Tab2：会议议程 -->
+        <div class="ctab-pane" id="ctabAgenda" hidden>
+          <div class="meta-panel" id="metaPanel">
+            <div class="mp-body">
+              <div class="meta-import">
+                <button class="btn-import-agenda" id="importAgendaBtn" title="上传会议议程 Word 文档，自动提取并填充">📄 导入议程</button>
+                <input type="file" id="agendaFile" accept=".docx" hidden>
+                <div class="mi-status" id="agendaStatus"></div>
+              </div>
+              <div class="meta-field"><label>会议名称</label><input data-k="title" placeholder="如：Q3 产品评审会"></div>
+              <div class="meta-field"><label>日期时间</label><input type="datetime-local" data-k="date" style="color-scheme:dark;"></div>
+              <div class="meta-field"><label>地点</label><input data-k="place" placeholder="如：3楼会议室"></div>
+              <div class="meta-field">
+                <label>参会人员</label>
+                <div class="attendee-editor" id="attendeeEditor"></div>
+                <button class="btn-add-attendee" id="addAttendeeBtn">＋ 添加参会人</button>
+              </div>
+              <div class="meta-field"><label>议程</label><textarea class="agenda-input" data-k="agenda" placeholder="本次会议议程…"></textarea></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 右：结果（语音转写 / 会议总结，保持不变） -->
+      <main class="results">
+        <div class="result-tabs">
+          <button class="rtab active" data-tab="transcript"><svg class="rtab-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg><span>语音转写</span></button>
+          <button class="rtab" data-tab="summary"><svg class="rtab-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="14" y2="17"/></svg><span>会议总结</span></button>
+        </div>
+
+        <div class="tab-pane" id="tabTranscript">
+        <div class="toolbar">
+          <div class="group">
+            <button class="btn-plain" id="findToggleBtn" title="查找 / 替换 (Ctrl+F)">🔍 查找 / 替换</button>
+          </div>
+          <div class="divider"></div>
+          <div class="group">
+            <label class="chk" title="把连续的同一发言人段落合并显示"><input type="checkbox" id="mergeToggle" checked> 合并连续段</label>
+            <select id="speakerFilter" title="按发言人筛选">
+              <option value="">全部发言人</option>
+            </select>
+          </div>
+          <div class="spacer"></div>
+          <div class="group">
+            <button class="btn-plain" id="spkBtn" title="映射发言人">👥 映射发言人</button>
+            <button class="btn-plain" id="vpBtn" title="声纹库：登记声纹后开会自动识别发言人">🎙 声纹库</button>
+            <button class="btn-plain" id="hwBtn" title="热词干预">🔤 热词库</button>
+            <button class="btn-plain" id="undoBtn" title="撤销 (Ctrl+Z)" disabled>↶</button>
+            <button class="btn-plain" id="redoBtn" title="重做 (Ctrl+Y)" disabled>↷</button>
+          </div>
+          <div class="divider"></div>
+          <div class="group">
+            <button class="btn-plain" id="exportOptsBtn" title="导出选项">⚙</button>
+            <button class="btn-download" id="downloadBtn" disabled>导出 ▾</button>
+          </div>
+        </div>
+
+        <div class="results-scroll empty" id="resultsScroll">
+          <p class="empty-hint" id="emptyHint">在「会议录音」中上传音频并转写后，结果会显示在这里</p>
+        </div>
+        </div><!-- /tabTranscript -->
+
+        <div class="tab-pane" id="tabSummary" hidden>
+          <div class="summary-view" id="summaryView"></div>
+        </div><!-- /tabSummary -->
+      </main>
+      </div><!-- /workspace -->
+    </div>
+
+    <!-- 底部全局播放栏 -->
+    <div class="playbar" id="playbar" style="display:none;">
+      <span class="now-file" id="nowFile">未选择音频</span>
+      <button id="pbBack" title="后退 5 秒 (Ctrl+←)">« 5s</button>
+      <audio id="globalAudio" controls preload="metadata"></audio>
+      <button id="pbFwd" title="前进 5 秒 (Ctrl+→)">5s »</button>
+      <span style="margin-left:4px;">速度</span>
+      <button id="pbRateDown" title="减速">−</button>
+      <span class="rate-val" id="rateVal">1.0×</span>
+      <button id="pbRateUp" title="加速">+</button>
+      <button id="pbLoop" title="循环当前段">⟳ 循环</button>
+      <span class="seg-grp">
+        <button id="pbPrev" title="上一段 (Alt+↑)">↑段</button>
+        <button id="pbNext" title="下一段 (Alt+↓)">↓段</button>
+      </span>
+    </div>
+  </div>
+
+  <!-- 智能问答：浮动按钮 + 面板 -->
+  <button id="chatFab" class="chat-fab" title="智能问答">💬</button>
+  <div id="chatPanel" class="chat-panel">
+    <div class="chat-head">
+      <span class="ch-dot"></span>
+      <span>智能问答</span>
+      <span class="ch-spacer"></span>
+      <button class="ch-btn" id="chatClear" title="清空对话">🗑</button>
+      <button class="ch-btn" id="chatClose" title="收起">✕</button>
+    </div>
+    <div class="chat-body" id="chatBody">
+      <p class="chat-empty" id="chatEmpty">先完成音频转写，<br>即可就会议内容向 AI 提问。<br><br>例如：总结本次会议的关键决议 / 列出待办事项</p>
+    </div>
+    <div class="chat-input-row">
+      <textarea id="chatInput" rows="1" placeholder="就会议内容提问…（Enter 发送，Shift+Enter 换行）"></textarea>
+      <button class="chat-send" id="chatSend">发送</button>
+    </div>
+  </div>
+
+  <!-- 查找 / 替换 弹窗（非模态，仿主流编辑器） -->
+  <div id="findPop" class="find-widget" style="display:none;">
+    <button class="fw-expand" id="fwExpand" title="展开替换" aria-label="展开替换">▸</button>
+    <div class="fw-body">
+      <div class="fw-row">
+        <input type="text" id="findSearchInput" placeholder="查找" autocomplete="off">
+        <span class="fw-count" id="findCount">无结果</span>
+        <button class="fw-btn" id="findPrevBtn" title="上一个 (Shift+Enter)" disabled>‹</button>
+        <button class="fw-btn" id="findNextBtn" title="下一个 (Enter)" disabled>›</button>
+        <button class="fw-btn" id="findCloseBtn" title="关闭 (Esc)">✕</button>
+      </div>
+      <div class="fw-row fw-replace-row" id="fwReplaceRow">
+        <input type="text" id="findReplaceInput" placeholder="替换" autocomplete="off">
+        <button class="fw-btn" id="replaceOneBtn" title="替换当前项" disabled>替换</button>
+        <button class="fw-btn" id="replaceAllBtn" title="全部替换" disabled>全部</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 发言人弹出面板 -->
+  <div id="spkPop" class="popover" style="display:none;"></div>
+
+  <!-- 声纹库管理弹层（工具栏 🎙 声纹库 触发；内容由 voiceprints.js 渲染） -->
+  <div id="vpPop" class="popover" style="display:none;min-width:340px;"></div>
+
+  <!-- 热词干预弹层（工具栏 🔤 热词 触发） -->
+  <div id="hotwordPop" class="popover" style="display:none;min-width:300px;">
+    <div class="pop-title">热词干预</div>
+    <p class="hw-hint">每行或空格分隔一个词，转写时优先识别<br>适合人名、地名、专有名词</p>
+    <textarea id="hotwordInput" placeholder="例：张三 李四&#10;北京总部&#10;产品发布会"></textarea>
+    <div class="hw-actions">
+      <span class="hw-status" id="hwStatus"></span>
+      <button class="hw-save" id="hwSaveBtn">保存热词</button>
+    </div>
+  </div>
+
+  <!-- 导出选项弹层 -->
+  <div id="exportOptsPop" class="popover opt-pop" style="display:none;min-width:220px;">
+    <div class="pop-title" style="margin-bottom:10px;">导出选项</div>
+    <label><input type="checkbox" id="optTimestamp"> 包含时间戳</label>
+    <label><input type="checkbox" id="optMergeSpk" checked> 合并同一发言人连续段</label>
+    <label><input type="checkbox" id="optSpeaker" checked> 显示发言人</label>
+    <label><input type="checkbox" id="optMeta" checked> 套用标准会议纪要格式</label>
+  </div>
+  <!-- 导出方式菜单（导出按钮下拉） -->
+  <div id="exportMenuPop" class="popover export-menu" style="display:none;min-width:200px;">
+    <button type="button" class="export-menu-item" id="exportMinutesItem">导出会议纪要</button>
+    <button type="button" class="export-menu-item" id="exportTranscriptItem">导出文字发言稿</button>
+  </div>
+  <!-- 新建会议对话框：填写议程信息即建档（标题必填） -->
+  <dialog id="newMeetingDialog" class="nm-dialog">
+    <form method="dialog" class="nm-form" id="newMeetingForm">
+      <div class="nm-head">
+        <h3>新建会议</h3>
+        <button type="button" class="nm-x" id="nmCancel" title="取消">✕</button>
+      </div>
+      <div class="nm-body">
+        <div class="meta-import">
+          <button type="button" class="btn-import-agenda" id="nmImportBtn" title="上传会议议程 Word 文档，自动提取并填充">📄 导入议程</button>
+          <input type="file" id="nmAgendaFile" accept=".docx" hidden>
+          <div class="mi-status" id="nmAgendaStatus"></div>
+        </div>
+        <div class="meta-field">
+          <label>会议名称 <span class="nm-req">*</span></label>
+          <input id="nm-title" placeholder="如：Q3 产品评审会" autocomplete="off">
+          <div class="nm-err" id="nmTitleErr" hidden>请填写会议名称</div>
+        </div>
+        <div class="meta-field"><label>会议时间</label><input type="datetime-local" id="nm-date" style="color-scheme:dark;"></div>
+        <div class="meta-field"><label>地点</label><input id="nm-place" placeholder="如：3楼会议室"></div>
+        <div class="meta-field">
+          <label>参会人员</label>
+          <div class="attendee-editor" id="nmAttendeeEditor"></div>
+          <button type="button" class="btn-add-attendee" id="nmAddAttendeeBtn">＋ 添加参会人</button>
+        </div>
+        <div class="meta-field"><label>议程</label><textarea class="agenda-input" id="nm-agenda" placeholder="本次会议议程…"></textarea></div>
+      </div>
+      <div class="nm-foot">
+        <button type="button" class="nm-btn-cancel" id="nmCancel2">取消</button>
+        <button type="button" class="nm-btn-ok" id="nmCreateBtn">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="/static/js/main.js"></script>
+</body>
+</html>

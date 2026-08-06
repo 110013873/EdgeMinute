@@ -1,0 +1,34 @@
+# FunASR 会议转写验证服务依赖
+# 安装: pip install -r requirements.txt
+
+fastapi>=0.109.0
+uvicorn>=0.27.0
+python-multipart>=0.0.6   # FastAPI 文件上传 (UploadFile) 所需
+
+# 语音识别
+funasr
+
+# 声纹登记/匹配：读取上传音频（切片）+ 向量运算
+# soundfile 用于把上传音频解码为 16k 单声道 PCM（不引入 ffmpeg）；
+# numpy 做重采样、切片拼接、L2 归一化与余弦相似度。funasr 已依赖 numpy，
+# 此处显式声明以固化声纹功能的直接依赖。
+numpy
+soundfile>=0.12.0
+
+# --- Jetson aarch64 JIT 崩溃修复：钉死 numba / llvmlite ---
+# Jetson AGX Orin / JetPack 5.1.2 / Python 3.8 上，更高版本 llvmlite 的 JIT 内存
+# 链接器（LLVM RuntimeDyld）在长音频/大内存布局下会触发 aarch64 重定位偏移超 33 位的
+# 断言 `isInt<33>(Result)`，直接 core dump（Aborted）。实测 numba 0.56.4 + llvmlite
+# 0.39.1 这套旧组合在本设备上不触发该断言，稳定可用。
+# 正因钉死此组合，app.py 才无需再设 NUMBA_DISABLE_JIT=1（该开关会拖慢 CAM++）。
+# 升级前务必在 Jetson 实测，否则崩溃/变慢会回归。
+numba==0.56.4
+llvmlite==0.39.1
+
+# 智能问答: 转发 OpenAI 兼容 LLM 接口
+httpx>=0.27.0
+
+# 会议纪要导出: Word 模板 (Jinja2 语法) 渲染
+docxtpl>=0.20.0
+# Word 读写 (docxtpl 依赖; 议程导入的 .docx 文本提取直接使用)
+python-docx>=1.1.0

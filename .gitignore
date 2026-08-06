@@ -1,0 +1,38 @@
+# ---- Runtime data (never commit meeting audio / transcripts / voiceprints) ----
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+funasr-env/
+
+# ---- Test / cache ----
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---- Env & secrets ----
+.env
+.env.local
+
+# ---- Editor / OS ----
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ---- Local agent session state (not part of the project) ----
+.claude/settings.local.json

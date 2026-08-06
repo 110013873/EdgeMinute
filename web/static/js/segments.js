@@ -1,0 +1,197 @@
+// ============================================================
+// 转写段：视图段映射（合并/筛选）、渲染、行内编辑与段操作
+// ============================================================
+import { state } from './state.js';
+import { $, resultsScroll, emptyHint } from './dom.js';
+import { escapeHtml, formatTime, joinText } from './util.js';
+import { speakerLabel, speakerColor, hexToDim, allOriginalSpeakers, ensureSpeakerColors, refreshSpeakerFilter } from './speakers.js';
+import { seekAndPlay } from './player.js';
+import { pushUndo } from './undo.js';
+import { updateRunAllState } from './upload.js';
+import { openChat, quoteSegmentToChat } from './chat.js';
+import { openAnnotatePopover } from './voiceprint-annotate.js';
+import { applySearchHighlight } from './find.js';
+import { scheduleAutoSave } from './autosave.js';
+
+// ---------- 视图段：把原始 segments 按当前"合并/筛选"选项映射为渲染用的行 ----------
+// 每个视图段带 srcIdx（覆盖的原始段下标数组）。未合并时 srcIdx 长度恒为 1。
+export function isMergeOn() { return $('mergeToggle').checked; }
+
+export function viewSegments(item) {
+  const merge = isMergeOn();
+  const out = [];
+  item.segments.forEach((seg, idx) => {
+    if (state.speakerFilter && String(seg.speaker) !== state.speakerFilter) return;
+    const last = out[out.length - 1];
+    if (merge && last && String(last.speaker) === String(seg.speaker) &&
+        last.srcIdx[last.srcIdx.length - 1] === idx - 1) {
+      // 与上一视图段连续且同发言人 → 合并（要求原始下标连续，避免筛选把不相邻段错误粘连）
+      last.end = seg.end;
+      last.text = joinText(last.text, seg.text);
+      last.flagged = last.flagged || seg.flagged;
+      last.srcIdx.push(idx);
+    } else {
+      out.push({ start: seg.start, end: seg.end, speaker: seg.speaker,
+                 text: (seg.text || '').trim(), flagged: seg.flagged, srcIdx: [idx] });
+    }
+  });
+  return out;
+}
+
+// ---------- 渲染结果 ----------
+export function renderResults() {
+  const withResults = state.files.filter(f => f.segments.length > 0);
+  if (withResults.length === 0) {
+    resultsScroll.classList.add('empty');
+    resultsScroll.innerHTML = '';
+    resultsScroll.appendChild(emptyHint);
+    return;
+  }
+  resultsScroll.classList.remove('empty');
+  resultsScroll.innerHTML = '';
+  for (const item of withResults) {
+    const views = viewSegments(item);
+    const section = document.createElement('div');
+    section.className = 'file-section';
+    section.innerHTML = (withResults.length > 1 ? `<h2>${escapeHtml(item.file.name)}</h2>` : '') +
+      `<div class="segments" data-file-id="${item.id}"></div>`;
+    resultsScroll.appendChild(section);
+    const segsEl = section.querySelector('.segments');
+    if (views.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'empty-hint';
+      empty.style.padding = '8px 4px';
+      empty.textContent = '该发言人没有发言内容';
+      segsEl.appendChild(empty);
+    } else {
+      views.forEach(v => segsEl.appendChild(buildSegRow(item, v)));
+    }
+  }
+  applySearchHighlight();
+}
+
+// view: {start,end,speaker,text,flagged,srcIdx:[...]}
+export function buildSegRow(item, view) {
+  const merged = view.srcIdx.length > 1;      // 该行是否由多个原始段合并而来
+  const firstIdx = view.srcIdx[0];
+  const row = document.createElement('div');
+  row.className = 'seg' + (view.flagged ? ' flagged' : '') + (merged ? ' merged' : '');
+  row.dataset.fileId = item.id;
+  row.dataset.idx = firstIdx;
+  row.dataset.srcIdx = view.srcIdx.join(',');
+  row.dataset.start = view.start;
+  row.dataset.end = view.end;
+  row.style.borderLeftColor = speakerColor(view.speaker);
+  // 合并行文本只读（避免把多段编辑安全地写回原始数据）；单段行仍可编辑
+  const editable = merged ? '' : 'contenteditable="true"';
+  row.innerHTML = `
+    <div class="time">${formatTime(view.start)}–${formatTime(view.end)}</div>
+    <div class="speaker" title="点击修改本段发言人" style="color:${speakerColor(view.speaker)};background:${hexToDim(speakerColor(view.speaker))};">${escapeHtml(speakerLabel(view.speaker))}</div>
+    <div class="text" ${editable} spellcheck="false">${escapeHtml(view.text)}</div>
+    <div class="rowbtns">
+      <button class="rowbtn ai" title="就本段向 AI 提问">💬</button>
+      <button class="rowbtn flag" title="标注声纹：将此段语音登记到声纹库">⚑</button>
+      <button class="rowbtn merge" title="与上一段合并 (Ctrl+M)"${merged ? ' disabled' : ''}>⇡</button>
+      <button class="rowbtn split" title="${merged ? '合并显示下不可拆分，请先关闭“合并连续段”' : '在光标处拆分'}"${merged ? ' disabled' : ''}>⤲</button>
+      <button class="rowbtn del" title="删除此段">×</button>
+    </div>`;
+
+  row.addEventListener('click', () => { seekAndPlay(item, view.start); setActiveSeg(row); });
+  const textEl = row.querySelector('.text');
+  textEl.addEventListener('click', (e) => e.stopPropagation());
+  if (!merged) {
+    const seg = item.segments[firstIdx];
+    textEl.addEventListener('blur', () => {
+      const t = textEl.textContent;
+      if (seg && t !== seg.text) { pushUndo(); seg.text = t; scheduleAutoSave(); }
+      if (state.searchMatches.length) applySearchHighlight();
+    });
+  }
+  row.querySelector('.speaker').addEventListener('click', (e) => { e.stopPropagation(); changeSegSpeaker(item, view); });
+  row.querySelector('.rowbtn.ai').addEventListener('click', (e) => { e.stopPropagation(); openChat(); quoteSegmentToChat(item, view); });
+  row.querySelector('.rowbtn.flag').addEventListener('click', (e) => { e.stopPropagation(); openAnnotatePopover(item, item.segments[firstIdx], e.currentTarget); });
+  const mergeBtn = row.querySelector('.rowbtn.merge');
+  if (!merged) mergeBtn.addEventListener('click', (e) => { e.stopPropagation(); mergeWithPrev(item, item.segments[firstIdx]); });
+  const splitBtn = row.querySelector('.rowbtn.split');
+  if (!merged) splitBtn.addEventListener('click', (e) => { e.stopPropagation(); splitAtCursor(item, item.segments[firstIdx], textEl); });
+  row.querySelector('.rowbtn.del').addEventListener('click', (e) => { e.stopPropagation(); deleteView(item, view); });
+  return row;
+}
+
+export function setActiveSeg(row) {
+  if (state.activeSegEl) state.activeSegEl.classList.remove('active');
+  row.classList.add('active');
+  state.activeSegEl = row;
+}
+
+// ---------- 发言人改归属（作用于视图段覆盖的所有原始段） ----------
+export function changeSegSpeaker(item, view) {
+  const opts = allOriginalSpeakers().map(sp => `${sp}=${speakerLabel(sp)}`).join('  ');
+  const cur = item.segments[view.srcIdx[0]];
+  const input = prompt(`将本段发言人改为（输入原始编号，或直接输入新名称）：\n可选：${opts}`, String(cur.speaker));
+  if (input === null) return;
+  const v = input.trim();
+  if (!v) return;
+  pushUndo();
+  view.srcIdx.forEach(i => { item.segments[i].speaker = v; });
+  ensureSpeakerColors();
+  refreshSpeakerFilter();
+  renderResults();
+  scheduleAutoSave();
+}
+
+// ---------- 段操作 ----------
+// 删除视图段：删掉它覆盖的所有原始段
+export function deleteView(item, view) {
+  pushUndo();
+  const drop = new Set(view.srcIdx);
+  item.segments = item.segments.filter((_, i) => !drop.has(i));
+  refreshSpeakerFilter();
+  renderResults();
+  updateRunAllState();
+  scheduleAutoSave();
+}
+
+export function mergeWithPrev(item, seg) {
+  const idx = item.segments.indexOf(seg);
+  if (idx <= 0) return;
+  pushUndo();
+  const prev = item.segments[idx-1];
+  const merged = { ...prev, end: seg.end, text: joinText(prev.text, seg.text), flagged: prev.flagged || seg.flagged };
+  item.segments = item.segments.map((s,i) => i===idx-1 ? merged : s).filter((_,i) => i!==idx);
+  renderResults();
+  scheduleAutoSave();
+}
+
+// Ctrl+M：把当前聚焦/高亮的转写行与其上一段合并（合并行、首段等无效场景静默忽略）
+export function mergeFocusedSeg() {
+  if ($('tabTranscript').hidden) return;                 // 仅在语音转写页生效
+  const row = state.activeSegEl || state.playingSegEl;
+  if (!row || row.classList.contains('merged')) return;  // 无聚焦行或合并显示行不处理
+  const item = state.files.find(f => f.id === row.dataset.fileId);
+  if (!item) return;
+  const seg = item.segments[+row.dataset.idx];
+  if (seg) mergeWithPrev(item, seg);
+}
+
+export function splitAtCursor(item, seg, textEl) {
+  const sel = window.getSelection();
+  let pos = seg.text.length;
+  if (sel && sel.rangeCount && textEl.contains(sel.anchorNode)) {
+    const range = sel.getRangeAt(0).cloneRange();
+    range.selectNodeContents(textEl);
+    range.setEnd(sel.anchorNode, sel.anchorOffset);
+    pos = range.toString().length;
+  }
+  if (pos <= 0 || pos >= seg.text.length) { alert('请把光标放在文本中间要拆分的位置'); return; }
+  pushUndo();
+  const idx = item.segments.indexOf(seg);
+  const mid = +(seg.start + (seg.end-seg.start) * (pos/seg.text.length)).toFixed(1);
+  const first = { ...seg, end: mid, text: seg.text.slice(0,pos).trim() };
+  const second = { ...seg, start: mid, text: seg.text.slice(pos).trim(), flagged: false };
+  const arr = item.segments.slice();
+  arr.splice(idx, 1, first, second);
+  item.segments = arr;
+  renderResults();
+  scheduleAutoSave();
+}
