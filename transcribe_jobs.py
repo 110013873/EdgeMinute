@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import Any, Awaitable, Callable
 
 # 文件级状态常量（与 services 文件级语义一致；此处只用到活动态与终态）
@@ -28,7 +29,7 @@ ERROR = "error"
 class JobState:
     """单个「会议某文件」的转写任务运行态（进程内，不持久化）。"""
 
-    __slots__ = ("meeting_id", "file_index", "status", "task", "error")
+    __slots__ = ("meeting_id", "file_index", "status", "task", "error", "started_at")
 
     def __init__(self, meeting_id: int, file_index: int):
         self.meeting_id = meeting_id
@@ -36,6 +37,9 @@ class JobState:
         self.status = QUEUED
         self.task: asyncio.Task | None = None
         self.error: str = ""
+        # 进入 processing 的墙钟时刻（epoch 秒）；供前端把「已过时间」算准，
+        # 刷新/重连后进度条不从 0 重爬。queued 阶段为 0（不显示进度）。
+        self.started_at: float = 0.0
 
 
 class TranscribeManager:
@@ -82,6 +86,12 @@ class TranscribeManager:
         jobs = self._jobs.get(meeting_id, {})
         return sorted(i for i, j in jobs.items() if j.status in (QUEUED, PROCESSING))
 
+    def active_started_at(self, meeting_id: int) -> dict[int, float]:
+        """处理中文件的起始墙钟时刻 {file_index: started_at}；供快照续上进度。"""
+        jobs = self._jobs.get(meeting_id, {})
+        return {i: j.started_at for i, j in jobs.items()
+                if j.status == PROCESSING and j.started_at}
+
     # ---------- 提交任务 ----------
     def submit(
         self,
@@ -121,6 +131,7 @@ class TranscribeManager:
         mid, idx = state.meeting_id, state.file_index
         try:
             state.status = PROCESSING
+            state.started_at = time.time()
             self._broadcast(mid, self._file_event(state))
             out = await runner()  # {segments, elapsed, speaker_matches}
             state.status = DONE
@@ -186,6 +197,8 @@ class TranscribeManager:
             "file_index": state.file_index,
             "status": state.status,
         }
+        if state.status == PROCESSING and state.started_at:
+            ev["started_at"] = state.started_at
         if state.status == ERROR and state.error:
             ev["error"] = state.error
         return ev
@@ -196,22 +209,28 @@ def sse_frame(event: dict) -> str:
     return "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
 
 
-def snapshot_event(payload: dict, active_indices: list[int]) -> dict:
+def snapshot_event(payload: dict, active_indices: list[int],
+                   started_at: dict[int, float] | None = None) -> dict:
     """构造「连接即发」的全量快照事件：各文件当前 status（合并进程内活动态）。
 
-    payload：会议当前 DB payload；active_indices：登记表中仍在跑的文件下标。
+    payload：会议当前 DB payload；active_indices：登记表中仍在跑的文件下标；
+    started_at：{file_index: 起始墙钟秒}，让刷新/重连后进度条从真实进度续上。
     进程内活动态优先于 payload 落库态（落库可能滞后于内存进度）。
     """
     files = (payload or {}).get("files") or []
     active = set(active_indices or [])
+    starts = started_at or {}
     out_files = []
     for i, f in enumerate(files):
         st = PROCESSING if i in active else str(f.get("status", "") or "")
-        out_files.append({
+        entry = {
             "file_index": i,
             "status": st or ("done" if (f.get("segments") or []) else "pending"),
             "name": f.get("name", ""),
-        })
+        }
+        if st == PROCESSING and starts.get(i):
+            entry["started_at"] = starts[i]
+        out_files.append(entry)
     return {
         "type": "snapshot",
         "meeting_status": (payload or {}).get("status", ""),

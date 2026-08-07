@@ -13,6 +13,7 @@ import { ensureSpeakerColors, refreshSpeakerFilter, applySpeakerMatches } from '
 import { renderResults } from './segments.js';
 import { renderFileList, updateRunAllState } from './upload.js';
 import { scheduleAutoSave } from './autosave.js';
+import { startProgress, finishProgress, calibrateSpeed, clearAllProgress } from './progress.js';
 
 let es = null;          // 当前 EventSource
 let esMeetingId = null; // 当前订阅的会议 id
@@ -20,6 +21,7 @@ let esMeetingId = null; // 当前订阅的会议 id
 export function disconnect() {
   if (es) { try { es.close(); } catch (e) {} es = null; }
   esMeetingId = null;
+  clearAllProgress();  // 切会议清空进度运行态：fileId 跨会议不唯一，避免误命中新卡片
 }
 
 export function connect(meetingId) {
@@ -49,6 +51,8 @@ function applySnapshot(ev) {
     // 本地已是 done（有段落）则不因快照回退；其余以服务端为准
     if (item.status === 'done' && (item.segments || []).length) continue;
     if (item.status !== sf.status) { item.status = sf.status; touched = true; }
+    // 重连/刷新后若服务端仍在处理，按服务端下发的真实起点续跑进度条
+    if (sf.status === 'processing') startProgress(item, sf.started_at);
   }
   if (touched) { renderFileList(); updateRunAllState(); }
 }
@@ -58,15 +62,18 @@ function applyFileEvent(ev) {
   if (!item) return;
   if (ev.status === 'done') {
     item.status = 'done';
+    finishProgress(item, true);   // 进度补满 100% 并淡出
     // 段落不随事件下发，回读该会议拉回本文件 segments
     pullSegments(ev.file_index);
   } else if (ev.status === 'error') {
     item.status = 'error';
     item.error = ev.error || '转写失败';
+    finishProgress(item, false);  // 直接清除进度条
     renderFileList();
     updateRunAllState();
   } else {
     item.status = ev.status;  // queued / processing
+    if (ev.status === 'processing') startProgress(item, ev.started_at);  // 起跑假进度（含真实起点）
     renderFileList();
     updateRunAllState();
   }
@@ -103,6 +110,7 @@ async function pullSegments(fileIndex) {
     item.elapsed = pf.elapsed ?? item.elapsed;
     item.status = 'done';
     item.error = '';
+    calibrateSpeed(item);   // 用真实 (duration/elapsed) 校准自适应倍速
     ensureSpeakerColors();
     refreshSpeakerFilter();
     renderFileList();

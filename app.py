@@ -70,6 +70,10 @@ LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "http://127.0.0.1:8080").rstrip("/
 LLM_MODEL = os.environ.get("LLM_MODEL", "Qwen3-30B-A3B-Instruct")
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")  # 多数本地部署无需密钥
 LLM_TIMEOUT = env_float("LLM_TIMEOUT", 1800.0)
+# 会议总结是非流式、单次长输出（多发言人×多要点），本地小算力下生成耗时远高于
+# 普通问答。给它独立且充足的超时，避免因 .env 里 LLM_TIMEOUT 偏小而在生成中途
+# 被客户端断开（llama-server 侧表现为 cancel task，app 侧回 502）。默认取两者较大值。
+SUMMARY_TIMEOUT = max(env_float("SUMMARY_TIMEOUT", 1800.0), LLM_TIMEOUT)
 CHAT_MAX_CONTEXT_CHARS = env_int("CHAT_MAX_CONTEXT_CHARS", 24000)
 
 # 前端资源根目录（index.html / logo.svg / static/）
@@ -185,15 +189,24 @@ _infer_lock = asyncio.Lock()
 _jobs = transcribe_jobs.TranscribeManager()
 
 
-# 视频容器扩展名：这些格式需要通过 ffmpeg 抽音轨后送 ASR
-_VIDEO_EXT = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv", ".wmv", ".m4v", ".3gp"}
+# ASR 前音频预处理滤波链（识别前统一跑）：
+#   highpass=f=80        去掉 80Hz 以下低频隆隆声（空调/桌面震动/直流偏置）
+#   afftdn=nr=12         FFT 频域降噪，压制稳态背景噪声（12dB，偏保守不伤语音）
+#   acompressor          动态压缩，拉近远近发言人音量差，压制突发爆音
+#   loudnorm             EBU R128 响度归一化到 -16 LUFS，避免整体过轻/过响
+# 这些参数直接并入既有的转 16k/单声道那一步，不新增处理阶段。
+_ASR_AUDIO_FILTER = (
+    "highpass=f=80,"
+    "afftdn=nr=12,"
+    "acompressor=threshold=-20dB:ratio=3:attack=5:release=50,"
+    "loudnorm=I=-16:TP=-1.5:LRA=11"
+)
 
 
 def _ensure_audio_input(file_path: str) -> "tuple[str, bool]":
-    """若为视频容器则用 ffmpeg 抽音轨到临时 WAV；返回 (路径, 是否为临时文件)。"""
-    ext = os.path.splitext(file_path)[1].lower()
-    if ext not in _VIDEO_EXT:
-        return file_path, False
+    """统一预处理：所有输入都经 ffmpeg 转 16k 单声道 WAV 并跑降噪/响度归一化滤波，
+    返回 (路径, 是否为临时文件)。ffmpeg 缺失或处理失败时降级为原文件直送
+    （返回 (原路径, False)），保证音频预处理永不打断转写。"""
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
     tmp_path = tmp.name
     tmp.close()
@@ -201,6 +214,7 @@ def _ensure_audio_input(file_path: str) -> "tuple[str, bool]":
         cmd = [
             "ffmpeg", "-nostdin", "-loglevel", "error",
             "-i", file_path,
+            "-af", _ASR_AUDIO_FILTER,
             "-f", "wav", "-acodec", "pcm_s16le",
             "-ac", "1", "-ar", "16000",
             "-y", tmp_path,
@@ -210,9 +224,15 @@ def _ensure_audio_input(file_path: str) -> "tuple[str, bool]":
             stderr = (proc.stderr or b"").decode("utf-8", "replace").strip()
             raise RuntimeError(stderr or f"ffmpeg 退出码 {proc.returncode}")
         return tmp_path, True
-    except Exception:
-        os.remove(tmp_path)
-        raise
+    except Exception as e:
+        # 降级：清掉半成品临时文件，原文件直送 ASR（视频文件此时可能无法解码，
+        # 但保持与旧行为一致——预处理是增强项，不应成为新的失败点）。
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        print(f"[ASR] 音频预处理失败，降级为原文件直送：{e}")
+        return file_path, False
 
 
 def _run_asr(tmp_path: str, hotword: str):
@@ -733,12 +753,13 @@ async def summarize(payload: dict = Body(...)):
             meta, segments, budget=CHAT_MAX_CONTEXT_CHARS, speaker_map=speaker_map
         ),
         "temperature": 0.2,  # 低温：抑制 JSON 漂移，保持总结稳定
-        "max_tokens": 2000,
+        # 详实总结（多发言人、每人多要点）输出较长，给足空间避免 JSON 被截断解析失败
+        "max_tokens": 4096,
         "stream": False,
     }
     url = f"{LLM_BASE_URL}/v1/chat/completions"
     try:
-        async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=SUMMARY_TIMEOUT) as client:
             r = await client.post(url, json=body, headers=_llm_headers())
             r.raise_for_status()
             content = r.json()["choices"][0]["message"]["content"]
@@ -1203,7 +1224,9 @@ async def history_events(meeting_id: int, request: Request):
         try:
             # 连接即发全量快照（进程内活动态覆盖落库态）
             snap = transcribe_jobs.snapshot_event(
-                payload, _jobs.active_file_indices(meeting_id)
+                payload,
+                _jobs.active_file_indices(meeting_id),
+                _jobs.active_started_at(meeting_id),
             )
             yield transcribe_jobs.sse_frame(snap)
             while True:

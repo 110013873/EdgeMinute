@@ -81,13 +81,15 @@ async function exportViaTemplate() {
     speakerMap: state.speakerMap,
   };
   downloadBtn.disabled = true;
-  const prev = downloadBtn.textContent;
+  const prev = downloadBtn.innerHTML;
+  // 忙碌态文案统一带 spinner 前缀（与「导入议程」一致）
+  const setBusy = (text) => { downloadBtn.innerHTML = `<span class="spinner"></span>${text}`; };
   try {
     // 会议总结（概要/各发言人观点/决议）：已生成则复用，未生成则自动调用接口生成后再导出。
     // 生成失败不阻断导出——退化为对应段落留空，保证仍能拿到 Word。
     let summaryPayload = null;
     try {
-      downloadBtn.textContent = state.summary ? '生成中…' : '总结中…';
+      setBusy(state.summary ? '生成中…' : '总结中…');
       const summary = await ensureSummary();
       if (summary) {
         summaryPayload = {
@@ -99,7 +101,7 @@ async function exportViaTemplate() {
     } catch (e) {
       // 总结失败仅记录，继续导出（概要/观点/决议为空）
     }
-    downloadBtn.textContent = '生成中…';
+    setBusy('生成中…');
     const res = await fetch('/export/docx-template', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -115,7 +117,7 @@ async function exportViaTemplate() {
   } catch (e) {
     toast('导出失败：网络错误', 'err');
   } finally {
-    downloadBtn.textContent = prev;
+    downloadBtn.innerHTML = prev;
     downloadBtn.disabled = false;
   }
 }

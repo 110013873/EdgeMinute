@@ -216,6 +216,21 @@
   }
   .file-item .timing .elapsed { color: var(--ok); }
   .file-item .actions { display: flex; align-items: center; gap: 8px; }
+  /* 转写进度条：位于文件时长下方，一条常规细条。默认灰色背景槽，填充为 accent 色，
+     两端圆角。填充宽度由 progress.js 的 rAF 循环直接改写。 */
+  .file-item .prog {
+    height: 4px;
+    margin-bottom: 10px;
+    background: var(--border);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+  .file-item .prog-fill {
+    height: 100%;
+    width: 0;
+    background: var(--accent);
+    border-radius: 999px;
+  }
   .btn-transcribe {
     flex: 1;
     padding: 7px 10px;
@@ -757,7 +772,16 @@
   }
   .chat-empty { color: var(--muted); font-size: 12.5px; text-align: center; margin: auto 0; line-height: 1.6; }
   .chat-msg { display: flex; flex-direction: column; gap: 4px; max-width: 100%; }
-  .chat-msg .role { font-size: 11px; color: var(--muted); }
+  /* 角色标识：圆形徽标（我=accent 实心，AI=面板色描边） */
+  .chat-msg .role {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; border-radius: 50%;
+    font-size: 11px; font-weight: 600; line-height: 1; flex: none;
+  }
+  .chat-msg.user .role { background: var(--accent); color: #fff; }
+  .chat-msg.assistant .role {
+    background: var(--panel-alt); color: var(--text); border: 1px solid var(--border);
+  }
   .chat-msg .bubble {
     padding: 9px 12px; border-radius: 10px; font-size: 13.5px; line-height: 1.55;
     white-space: pre-wrap; word-break: break-word;

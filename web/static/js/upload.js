@@ -16,6 +16,7 @@ import { escapeHtml, escapeAttr, formatTime } from './util.js';
 import { loadIntoPlayer } from './player.js';
 import { persistFiles, uploadAudio } from './history-io.js';
 import { toast } from './ui-feedback.js';
+import { progressState } from './progress.js';
 
 export async function addFiles(fileListRaw) {
   const id = state.currentMeetingId;
@@ -72,12 +73,14 @@ export function renderFileList() {
     div.className = 'file-item' + (state.currentItem === item ? ' playing' : '');
     div.dataset.id = item.id;
     const busy = item.status === 'processing' || item.status === 'queued' || item.status === 'uploading';
+    const prog = progressState(item);   // 转写进度条运行态（null=不显示）
     div.innerHTML = `
       <div class="row1">
         <span class="fname" title="${escapeAttr(item.file.name)}">${escapeHtml(item.file.name)}${item.file.size ? `<span class="fsize">/${(item.file.size/1024/1024).toFixed(1)}MB</span>` : ''}</span>
         <span class="badge ${item.status}">${statusLabel(item.status)}</span>
       </div>
       <div class="timing">${buildTimingHtml(item)}</div>
+      ${prog ? `<div class="prog"><div class="prog-fill" style="width:${prog.width}"></div></div>` : ''}
       <div class="actions">
         <button class="btn-transcribe" data-id="${item.id}" ${busy ? 'disabled' : ''}>
           ${item.status === 'done' ? '重新转写' : '开始转写'}

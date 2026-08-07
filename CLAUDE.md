@@ -28,7 +28,8 @@ FUNASR_DEVICE=cpu python app.py
 | `LLM_BASE_URL` | `http://127.0.0.1:8080` | OpenAI-compatible LLM base URL for the Q&A panel |
 | `LLM_MODEL` | `Qwen3-30B-A3B-Instruct` | Chat model name |
 | `LLM_API_KEY` | `` (empty) | Bearer token, if the LLM requires one |
-| `LLM_TIMEOUT` | `120` | LLM request timeout (seconds) |
+| `LLM_TIMEOUT` | `1800` | LLM request timeout (seconds) for chat/agenda |
+| `SUMMARY_TIMEOUT` | `1800` | Timeout for the meeting-summary call (non-streaming, long output); floored to `LLM_TIMEOUT` |
 | `CHAT_MAX_CONTEXT_CHARS` | `24000` | Max transcript chars injected into the chat system prompt |
 | `HISTORY_DB_PATH` | `data/meetings.db` | SQLite file for meeting history |
 | `AUDIO_DIR` | `data/audio` | Root dir for persisted meeting audio (per-meeting subdir) |
