@@ -16,7 +16,7 @@
             <img src="/logo.svg" alt="密纪 EdgeMinute">
             <div class="brand-text">
               <h1>密纪 <span class="brand-en">EdgeMinute</span></h1>
-              <p class="sub">会议不上云，纪要不外传。</p>
+              <p class="sub">会议不上云，纪要不外传</p>
             </div>
           </div>
         </div>
@@ -142,14 +142,17 @@
           <div class="divider"></div>
           <div class="group">
             <label class="chk" title="把连续的同一发言人段落合并显示"><input type="checkbox" id="mergeToggle" checked> 合并连续段</label>
+            <span class="filter-ico" title="按发言人筛选" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/></svg>
+            </span>
             <select id="speakerFilter" title="按发言人筛选">
               <option value="">全部发言人</option>
             </select>
           </div>
           <div class="spacer"></div>
           <div class="group">
-            <button class="btn-plain" id="spkBtn" title="映射发言人">👥 映射发言人</button>
-            <button class="btn-plain" id="vpBtn" title="声纹库：登记声纹后开会自动识别发言人">🎙 声纹库</button>
+            <button class="btn-plain" id="spkBtn" title="映射发言人">🏷️ 映射发言人</button>
+            <button class="btn-plain" id="vpBtn" title="声纹库：登记声纹后开会自动识别发言人">⚑ 声纹库</button>
             <button class="btn-plain" id="hwBtn" title="热词干预">🔤 热词库</button>
             <button class="btn-plain" id="undoBtn" title="撤销 (Ctrl+Z)" disabled>↶</button>
             <button class="btn-plain" id="redoBtn" title="重做 (Ctrl+Y)" disabled>↷</button>
@@ -232,7 +235,7 @@
   <!-- 发言人弹出面板 -->
   <div id="spkPop" class="popover" style="display:none;"></div>
 
-  <!-- 声纹库管理弹层（工具栏 🎙 声纹库 触发；内容由 voiceprints.js 渲染） -->
+  <!-- 声纹库管理弹层（工具栏 ⚑ 声纹库 触发；内容由 voiceprints.js 渲染） -->
   <div id="vpPop" class="popover" style="display:none;min-width:340px;"></div>
 
   <!-- 热词干预弹层（工具栏 🔤 热词 触发） -->

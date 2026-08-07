@@ -4,7 +4,7 @@
 import { state } from './state.js';
 import { $, resultsScroll, emptyHint } from './dom.js';
 import { escapeHtml, formatTime, joinText } from './util.js';
-import { speakerLabel, speakerColor, hexToDim, allOriginalSpeakers, ensureSpeakerColors, refreshSpeakerFilter } from './speakers.js';
+import { speakerLabel, speakerColor, hexToDim, refreshSpeakerFilter, renameSpeakerLabel } from './speakers.js';
 import { seekAndPlay } from './player.js';
 import { pushUndo } from './undo.js';
 import { updateRunAllState } from './upload.js';
@@ -107,7 +107,7 @@ export function buildSegRow(item, view) {
       if (state.searchMatches.length) applySearchHighlight();
     });
   }
-  row.querySelector('.speaker').addEventListener('click', (e) => { e.stopPropagation(); changeSegSpeaker(item, view); });
+  row.querySelector('.speaker').addEventListener('click', (e) => { e.stopPropagation(); beginSpeakerEdit(row.querySelector('.speaker'), view); });
   row.querySelector('.rowbtn.ai').addEventListener('click', (e) => { e.stopPropagation(); openChat(); quoteSegmentToChat(item, view); });
   row.querySelector('.rowbtn.flag').addEventListener('click', (e) => { e.stopPropagation(); openAnnotatePopover(item, item.segments[firstIdx], e.currentTarget); });
   const mergeBtn = row.querySelector('.rowbtn.merge');
@@ -124,20 +124,43 @@ export function setActiveSeg(row) {
   state.activeSegEl = row;
 }
 
-// ---------- 发言人改归属（作用于视图段覆盖的所有原始段） ----------
-export function changeSegSpeaker(item, view) {
-  const opts = allOriginalSpeakers().map(sp => `${sp}=${speakerLabel(sp)}`).join('  ');
-  const cur = item.segments[view.srcIdx[0]];
-  const input = prompt(`将本段发言人改为（输入原始编号，或直接输入新名称）：\n可选：${opts}`, String(cur.speaker));
-  if (input === null) return;
-  const v = input.trim();
-  if (!v) return;
-  pushUndo();
-  view.srcIdx.forEach(i => { item.segments[i].speaker = v; });
-  ensureSpeakerColors();
-  refreshSpeakerFilter();
-  renderResults();
-  scheduleAutoSave();
+// ---------- 发言人就地重命名（点击说话人标签 → 变可编辑输入框，无弹窗） ----------
+// 提交后把“当前显示名与本行相同”的所有原始发言人一并映射为新名字（走 speakerMap，
+// 绝不改写 seg.speaker，与手动映射保持同一显示不变量）。
+export function beginSpeakerEdit(spkEl, view) {
+  if (spkEl.querySelector('input')) return;             // 已在编辑中
+  const oldLabel = speakerLabel(view.speaker);
+  const input = document.createElement('input');
+  input.className = 'speaker-edit';
+  input.value = oldLabel;
+  input.spellcheck = false;
+  spkEl.textContent = '';
+  spkEl.appendChild(input);
+  input.focus();
+  input.select();
+
+  let done = false;
+  const commit = (save) => {
+    if (done) return;
+    done = true;
+    const next = input.value.trim();
+    if (save && next && next !== oldLabel) {
+      pushUndo();
+      renameSpeakerLabel(oldLabel, next);
+      renderResults();                                  // 重建整个列表：所有同名行同步更新
+      scheduleAutoSave();
+    } else {
+      // 取消或未变更：仅还原本标签文本，避免整表重绘
+      spkEl.textContent = oldLabel;
+    }
+  };
+  input.addEventListener('click', (e) => e.stopPropagation());
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+  });
+  input.addEventListener('blur', () => commit(true));
 }
 
 // ---------- 段操作 ----------

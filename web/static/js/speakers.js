@@ -29,6 +29,23 @@ export function speakerLabel(raw) {
 
 export function speakerColor(raw) { return speakerColors[String(raw)] || 'var(--accent)'; }
 
+// 就地重命名：把“当前显示名等于 oldLabel”的所有原始发言人一并映射为 newLabel。
+// 走 speakerMap（绝不改写 seg.speaker），因此界面上凡是显示为 oldLabel 的段都会同步变。
+// 被改动的行清除其声纹“自动识别”徽标记录。返回是否有变更（调用方负责 pushUndo/重绘）。
+export function renameSpeakerLabel(oldLabel, newLabel) {
+  const from = (oldLabel || '').trim();
+  const to = (newLabel || '').trim();
+  if (!to || from === to) return false;
+  const targets = allOriginalSpeakers().filter(sp => speakerLabel(sp) === from);
+  if (!targets.length) return false;
+  for (const sp of targets) {
+    state.speakerMap[sp] = to;
+    delete state.speakerAuto[sp];   // 用户手动重命名 → 不再是自动识别结果
+  }
+  refreshSpeakerFilter();
+  return true;
+}
+
 // 静默应用声纹自动匹配结果 matches = { spk: {name, score} }。
 // 只填用户尚未手动设定的簇（speakerMap 中该键缺失或为空），绝不覆盖已有手填值。
 // 记录 { name, score } 到 state.speakerAuto 供面板标注——存 name 是为了让面板只在
