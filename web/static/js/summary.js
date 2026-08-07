@@ -29,10 +29,12 @@ export function renderSummary() {
   const busyLabel = '<span class="spinner"></span>生成中…';
 
   if (!state.summary && !state.summaryBusy) {
+    // 空状态：让提示文案在操作条下方的剩余空间内居中（与语音转写页 .results-scroll.empty 一致）
+    summaryView.classList.add('is-empty');
     summaryView.innerHTML = `
       <div class="sum-bar">
-        <button id="sumGenBtn"${hasSegs ? '' : ' disabled'}>生成总结</button>
         <span class="sum-status"></span>
+        <button id="sumGenBtn"${hasSegs ? '' : ' disabled'}>生成总结</button>
       </div>
       <div class="sum-empty">${hasSegs
         ? '点击「生成总结」，AI 将依据会议转写内容<br>提炼会议概要、各发言人观点与会议决议。'
@@ -42,10 +44,11 @@ export function renderSummary() {
   }
 
   // 有总结（或正在生成）：操作条 + 三块
+  summaryView.classList.remove('is-empty');
   summaryView.innerHTML = `
     <div class="sum-bar">
-      <button id="sumRegenBtn" class="regen"${state.summaryBusy ? ' disabled' : ''}>${state.summaryBusy ? busyLabel : '重新总结'}</button>
       <span class="sum-status"></span>
+      <button id="sumRegenBtn" class="regen"${state.summaryBusy ? ' disabled' : ''}>${state.summaryBusy ? busyLabel : '重新总结'}</button>
     </div>
     <div id="sumSections"></div>`;
   summaryView.querySelector('#sumRegenBtn')?.addEventListener('click', generateSummary);

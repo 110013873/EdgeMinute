@@ -871,12 +871,19 @@
   }
   .sum-bar button:disabled { opacity: 0.4; cursor: not-allowed; }
   .sum-bar button.regen { background: var(--accent-dim); color: var(--accent); }
-  .sum-status { flex: 1; font-size: 12px; color: var(--muted); }
+  .sum-status { flex: 1; font-size: 12px; color: var(--muted); text-align: right; }
   .sum-status.loading { color: var(--accent); }
   .sum-status.ok { color: var(--ok); }
   .sum-status.err { color: var(--err); }
   .sum-status .spinner { --spin-size: 12px; --spin-gap: 6px; }
   .sum-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 40px 20px; line-height: 1.7; }
+  /* 空状态：容器转为纵向 flex，操作条置顶、提示文案在剩余空间内居中，
+     与语音转写页空态（.results-scroll.empty 居中）位置保持一致 */
+  .summary-view.is-empty { display: flex; flex-direction: column; }
+  .summary-view.is-empty .sum-bar { flex: none; }
+  .summary-view.is-empty .sum-empty {
+    flex: 1; display: flex; align-items: center; justify-content: center; padding: 20px;
+  }
 
   .sum-section {
     border: 1px solid var(--border); border-radius: 10px;

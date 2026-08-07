@@ -64,6 +64,13 @@ export async function addFiles(fileListRaw) {
   } catch (e) {
     /* 持久化失败：文件仍在本地列表，用户可重试添加 */
   }
+
+  // 上传+固化完成后自动开始转写：逐个提交本批成功上传（pending）的文件，
+  // 无需用户手动点「开始转写」。已切换会议则跳过（避免给别的会议误提交）。
+  if (state.currentMeetingId !== id) return;
+  for (const item of added) {
+    if (item.status === 'pending' && item.has_audio) await transcribeOne(item.id);
+  }
 }
 
 export function renderFileList() {
