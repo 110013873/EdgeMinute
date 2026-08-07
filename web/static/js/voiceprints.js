@@ -8,6 +8,8 @@
 // ============================================================
 import { $ } from './dom.js';
 import { escapeHtml, escapeAttr } from './util.js';
+import { icon } from './icons.js';
+import { confirmDialog } from './ui-feedback.js';
 
 const vpPop = $('vpPop');
 
@@ -104,7 +106,7 @@ function render() {
         <input class="vp-inp" id="vpTitle" placeholder="职务（可选）">
       </div>
       <div class="vp-enroll-row">
-        <label class="vp-file-btn" for="vpFile">📁 选择音频</label>
+        <label class="vp-file-btn" for="vpFile">${icon('folder', 15)} 选择音频</label>
         <input type="file" id="vpFile" accept="audio/*" hidden>
         <span class="vp-file-name" id="vpFileName">未选择文件</span>
         <button class="btn-download" id="vpEnroll">登记</button>
@@ -198,7 +200,13 @@ async function saveEdit(id) {
 
 async function deletePerson(id) {
   const p = people.find(x => x.id === id);
-  if (!window.confirm(`删除声纹「${p ? p.name : id}」？此操作不可撤销。`)) return;
+  const ok = await confirmDialog({
+    title: '删除声纹',
+    message: `删除声纹「${p ? p.name : id}」？此操作不可撤销。`,
+    confirmText: '删除',
+    danger: true,
+  });
+  if (!ok) return;
   await sendJson(`/voiceprints/${id}`, 'DELETE', null, '已删除');
 }
 

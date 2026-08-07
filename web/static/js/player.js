@@ -5,6 +5,7 @@ import { state } from './state.js';
 import { $, gAudio } from './dom.js';
 import { renderFileList } from './upload.js';
 import { setActiveSeg } from './segments.js';
+import { toast } from './ui-feedback.js';
 
 export function loadIntoPlayer(item, autoplay) {
   if (!item) return;
@@ -69,7 +70,7 @@ export function toggleLoop() {
   if (state.loopSeg) state.loopSeg = null;
   else {
     const el = state.playingSegEl || state.activeSegEl;
-    if (!el) { alert('请先点击或播放某一段，再开启循环'); return; }
+    if (!el) { toast('请先点击或播放某一段，再开启循环', 'warn'); return; }
     state.loopSeg = { start: parseFloat(el.dataset.start), end: parseFloat(el.dataset.end) };
   }
   updatePlaybar();

@@ -20,6 +20,7 @@ import { updateUndoButtons } from './undo.js';
 import { resetMeeting, bumpSaveEpoch } from './autosave.js';
 import { syncWorkspaceVisibility } from './workspace.js';
 import { connect as connectEvents, disconnect as disconnectEvents } from './transcribe-events.js';
+import { toast } from './ui-feedback.js';
 
 // 释放当前工作区里由 URL.createObjectURL 生成的 blob，避免内存泄漏
 function revokeBlobUrls() {
@@ -96,7 +97,7 @@ export async function restoreFromHistory(id) {
     if (!res.ok || !data.ok) throw new Error(data.error || 'HTTP ' + res.status);
     payload = (data.item && data.item.payload) || {};
   } catch (e) {
-    alert('打开失败：' + (e.message || '网络错误'));
+    toast('打开失败：' + (e.message || '网络错误'), 'err');
     return;
   }
 

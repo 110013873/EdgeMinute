@@ -9,6 +9,7 @@ import { attendeeList } from './meta-panel.js';
 import { renderResults } from './segments.js';
 import { pushUndo } from './undo.js';
 import { scheduleAutoSave } from './autosave.js';
+import { icon } from './icons.js';
 
 const spkPop = $('spkPop');
 
@@ -23,7 +24,7 @@ export function renderSpkPop() {
     // 声纹自动识别标记：用紧凑 ICON 代替文字（避免长名字被徽标挤到换行），
     // 相似度放进 title 悬浮提示。
     const autoBadge = (auto && cur && cur === auto.name)
-      ? `<span class="spk-auto" title="声纹自动识别，相似度 ${Number(auto.score).toFixed(2)}">🎙</span>`
+      ? `<span class="spk-auto" title="声纹自动识别，相似度 ${Number(auto.score).toFixed(2)}">${icon('mic', 13)}</span>`
       : '';
     const opts = attendees.length
       ? `<select data-pick="${escapeAttr(sp)}">

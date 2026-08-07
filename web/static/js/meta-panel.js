@@ -5,16 +5,18 @@ import { state, normalizeMeta } from './state.js';
 import { $ } from './dom.js';
 import { escapeAttr, toDatetimeLocal } from './util.js';
 import { scheduleAutoSave } from './autosave.js';
+import { icon } from './icons.js';
 
 const attendeeEditor = $('attendeeEditor');
 
 export function renderAttendees() {
   attendeeEditor.innerHTML = (state.meta.attendees || []).map((a, i) => `
     <div class="attendee-row" data-i="${i}">
+      <span class="a-grip" draggable="true" title="拖拽调整顺序">${icon('grip', 15)}</span>
       <input class="a-name"  data-f="name"  value="${escapeAttr(a.name)}"  placeholder="姓名">
       <input class="a-unit"  data-f="unit"  value="${escapeAttr(a.unit)}"  placeholder="单位">
       <input class="a-title" data-f="title" value="${escapeAttr(a.title)}" placeholder="职务">
-      <button class="a-del" data-del="${i}" title="删除">✕</button>
+      <button class="a-del" data-del="${i}" title="删除">${icon('x', 15)}</button>
     </div>`).join('');
 }
 
@@ -44,6 +46,68 @@ export function hasMeta() {
 // datetime-local 存储为 "YYYY-MM-DDTHH:mm"，展示时把 T 换成空格
 export function displayDate() { return (state.meta.date || '').replace('T', ' '); }
 
+// —— 参会人行拖拽排序 ——
+// 委托绑定在 attendeeEditor 上（只挂一次）：拖拽源是行首把手 .a-grip，放置目标是 .attendee-row。
+// 依据指针相对目标行中线，决定插到目标行之前/之后；顺序变更后以不可变方式重排 meta.attendees。
+let dragFromIdx = null;
+function wireAttendeeDrag() {
+  attendeeEditor.addEventListener('dragstart', (e) => {
+    const grip = e.target.closest('.a-grip'); if (!grip) return;
+    const row = grip.closest('.attendee-row'); if (!row) return;
+    dragFromIdx = +row.dataset.i;
+    row.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    // Firefox 需要设置数据拖拽才会启动
+    try { e.dataTransfer.setData('text/plain', String(dragFromIdx)); } catch (err) {}
+  });
+  attendeeEditor.addEventListener('dragover', (e) => {
+    if (dragFromIdx === null) return;
+    e.preventDefault();                       // 允许放置
+    e.dataTransfer.dropEffect = 'move';
+    const row = e.target.closest('.attendee-row');
+    attendeeEditor.querySelectorAll('.attendee-row.drop-before, .attendee-row.drop-after')
+      .forEach(r => r.classList.remove('drop-before', 'drop-after'));
+    if (!row) return;
+    const rect = row.getBoundingClientRect();
+    const after = e.clientY > rect.top + rect.height / 2;
+    row.classList.add(after ? 'drop-after' : 'drop-before');
+  });
+  attendeeEditor.addEventListener('drop', (e) => {
+    if (dragFromIdx === null) return;
+    e.preventDefault();
+    const row = e.target.closest('.attendee-row');
+    if (row) {
+      const to = +row.dataset.i;
+      const rect = row.getBoundingClientRect();
+      const after = e.clientY > rect.top + rect.height / 2;
+      let target = after ? to + 1 : to;       // 插入位置（未剔除源之前的下标）
+      reorderAttendees(dragFromIdx, target);
+    }
+    clearDragCues();
+  });
+  attendeeEditor.addEventListener('dragend', clearDragCues);
+}
+
+function clearDragCues() {
+  dragFromIdx = null;
+  attendeeEditor.querySelectorAll('.dragging, .drop-before, .drop-after')
+    .forEach(r => r.classList.remove('dragging', 'drop-before', 'drop-after'));
+}
+
+// 把 from 处的参会人移动到 to 处（to 为剔除前的目标下标）；不可变重建数组后重渲染
+function reorderAttendees(from, to) {
+  const arr = state.meta.attendees || [];
+  if (from < 0 || from >= arr.length) return;
+  const next = arr.slice();
+  const [moved] = next.splice(from, 1);
+  const insertAt = to > from ? to - 1 : to;   // 剔除源后目标下标左移一位
+  if (insertAt === from) return;              // 位置未变，跳过
+  next.splice(insertAt, 0, moved);
+  state.meta = { ...state.meta, attendees: next };
+  renderAttendees();
+  scheduleAutoSave();
+}
+
 // 事件绑定（在 main.js 装配阶段调用一次）
 export function initMetaPanel() {
   // 标量字段绑定（不含 attendees，其由结构化编辑器管理）
@@ -68,7 +132,14 @@ export function initMetaPanel() {
   $('addAttendeeBtn').addEventListener('click', () => {
     state.meta = { ...state.meta, attendees: [...state.meta.attendees, { name:'', unit:'', title:'' }] };
     renderAttendees();
+    // 新增后滚到底部并聚焦新行姓名输入，方便连续录入
+    attendeeEditor.scrollTop = attendeeEditor.scrollHeight;
+    const rows = attendeeEditor.querySelectorAll('.attendee-row');
+    rows[rows.length - 1]?.querySelector('.a-name')?.focus();
   });
+
+  // 拖拽调整参会人顺序：以行首「⋮⋮」把手为拖拽源，行为放置目标，落点前后插入
+  wireAttendeeDrag();
 
   // 导入议程：上传 Word → 后端 LLM 提取 → 合并填充
   const importAgendaBtn = $('importAgendaBtn');

@@ -9,6 +9,8 @@
 import { state } from './state.js';
 import { $ } from './dom.js';
 import { escapeHtml, escapeAttr, formatTime } from './util.js';
+import { icon } from './icons.js';
+import { toast, confirmDialog } from './ui-feedback.js';
 
 const listEl = $('historyList');
 const searchEl = $('historySearch');
@@ -61,7 +63,7 @@ function buildItem(it) {
       <div class="hp-title" title="${escapeAttr(title)}"><span class="hp-title-text">${escapeHtml(title)}</span>${statusBadge(it.status)}</div>
       <div class="hp-meta">${itemMetaLine(it)}</div>
     </div>
-    <button class="hp-del" title="删除此会议（含音频）" data-del="${it.id}">🗑</button>`;
+    <button class="hp-del" title="删除此会议（含音频）" data-del="${it.id}">${icon('trash', 15)}</button>`;
   div.addEventListener('click', (e) => {
     if (e.target.closest('[data-del]')) return;
     document.dispatchEvent(new CustomEvent('history:open', { detail: { id: it.id } }));
@@ -86,7 +88,7 @@ function renderGroups(groups) {
   for (const g of nonEmpty) {
     const day = document.createElement('div');
     day.className = 'hp-day';
-    day.textContent = g.date;
+    day.innerHTML = `${icon('calendar', 13)}<span>${escapeHtml(g.date)}</span>`;
     listEl.appendChild(day);
     for (const it of g.items) listEl.appendChild(buildItem(it));
   }
@@ -105,7 +107,13 @@ export async function refreshHistory() {
 }
 
 async function deleteMeeting(id, title) {
-  if (!confirm(`确定删除会议「${title}」吗？\n转写记录与音频将一并删除，且无法恢复。`)) return;
+  const ok = await confirmDialog({
+    title: '删除会议',
+    message: `确定删除会议「${title}」吗？\n转写记录与音频将一并删除，且无法恢复。`,
+    confirmText: '删除',
+    danger: true,
+  });
+  if (!ok) return;
   try {
     const res = await fetch(`/history/${id}`, { method: 'DELETE' });
     const data = await res.json();
@@ -114,7 +122,7 @@ async function deleteMeeting(id, title) {
     if (state.currentMeetingId === id) document.dispatchEvent(new CustomEvent('history:reset'));
     refreshHistory();
   } catch (e) {
-    alert('删除失败：' + (e.message || '网络错误'));
+    toast('删除失败：' + (e.message || '网络错误'), 'err');
   }
 }
 

@@ -14,6 +14,7 @@
 // ============================================================
 import { state } from './state.js';
 import { buildPayload } from './history-io.js';
+import { toast } from './ui-feedback.js';
 
 const DEBOUNCE_MS = 1500;
 
@@ -22,21 +23,7 @@ let dirty = false;       // 在途期间又发生了变更
 let debounceTimer = null;
 let saveEpoch = 0;       // 每次工作区切换自增；在途保存据此判定是否已过期
 
-// —— 轻量保存状态提示（无需预置 HTML，浮层 toast）——
-let toastEl = null;
-function toast(text, kind) {
-  if (!toastEl) {
-    toastEl = document.createElement('div');
-    toastEl.className = 'save-toast';
-    document.body.appendChild(toastEl);
-  }
-  toastEl.textContent = text;
-  toastEl.className = 'save-toast show' + (kind ? ' ' + kind : '');
-  clearTimeout(toastEl._t);
-  if (kind !== 'saving') {
-    toastEl._t = setTimeout(() => { toastEl.className = 'save-toast'; }, 1800);
-  }
-}
+// 保存状态提示走公共浮层 toast（ui-feedback.js），此处不再自建。
 
 // 已建档即可保存编辑（草稿也允许存 meta）
 function hasSavableContent() {

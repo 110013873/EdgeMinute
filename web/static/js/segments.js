@@ -12,6 +12,8 @@ import { openChat, quoteSegmentToChat } from './chat.js';
 import { openAnnotatePopover } from './voiceprint-annotate.js';
 import { applySearchHighlight } from './find.js';
 import { scheduleAutoSave } from './autosave.js';
+import { toast } from './ui-feedback.js';
+import { icon } from './icons.js';
 
 // ---------- 视图段：把原始 segments 按当前"合并/筛选"选项映射为渲染用的行 ----------
 // 每个视图段带 srcIdx（覆盖的原始段下标数组）。未合并时 srcIdx 长度恒为 1。
@@ -89,11 +91,16 @@ export function buildSegRow(item, view) {
     <div class="speaker" title="点击修改本段发言人" style="color:${speakerColor(view.speaker)};background:${hexToDim(speakerColor(view.speaker))};">${escapeHtml(speakerLabel(view.speaker))}</div>
     <div class="text" ${editable} spellcheck="false">${escapeHtml(view.text)}</div>
     <div class="rowbtns">
-      <button class="rowbtn ai" title="就本段向 AI 提问">💬</button>
-      <button class="rowbtn flag" title="标注声纹：将此段语音登记到声纹库">⚑</button>
-      <button class="rowbtn merge" title="与上一段合并 (Ctrl+M)"${merged ? ' disabled' : ''}>⇡</button>
-      <button class="rowbtn split" title="${merged ? '合并显示下不可拆分，请先关闭“合并连续段”' : '在光标处拆分'}"${merged ? ' disabled' : ''}>⤲</button>
-      <button class="rowbtn del" title="删除此段">×</button>
+      <button class="rowbtn flag" title="标注声纹">${icon('flag', 15)}</button>
+      <button class="rowbtn ai" title="AI问答">${icon('message', 15)}</button>
+      <div class="rowmore">
+        <button class="rowbtn more" title="更多操作" aria-haspopup="true" aria-expanded="false">${icon('more', 15)}</button>
+        <div class="rowmenu" hidden>
+          <button class="rowmenu-item merge"${merged ? ' disabled' : ''}>${icon('mergeUp', 14)}<span>与上一段合并</span></button>
+          <button class="rowmenu-item split"${merged ? ' disabled' : ''}>${icon('split', 14)}<span>${merged ? '合并下不可拆分' : '在光标处拆分'}</span></button>
+          <button class="rowmenu-item del">${icon('trash', 14)}<span>删除此段</span></button>
+        </div>
+      </div>
     </div>`;
 
   row.addEventListener('click', () => { seekAndPlay(item, view.start); setActiveSeg(row); });
@@ -108,15 +115,40 @@ export function buildSegRow(item, view) {
     });
   }
   row.querySelector('.speaker').addEventListener('click', (e) => { e.stopPropagation(); beginSpeakerEdit(row.querySelector('.speaker'), view); });
-  row.querySelector('.rowbtn.ai').addEventListener('click', (e) => { e.stopPropagation(); openChat(); quoteSegmentToChat(item, view); });
+  // 常用操作外置：标注声纹 / AI 提问
   row.querySelector('.rowbtn.flag').addEventListener('click', (e) => { e.stopPropagation(); openAnnotatePopover(item, item.segments[firstIdx], e.currentTarget); });
-  const mergeBtn = row.querySelector('.rowbtn.merge');
-  if (!merged) mergeBtn.addEventListener('click', (e) => { e.stopPropagation(); mergeWithPrev(item, item.segments[firstIdx]); });
-  const splitBtn = row.querySelector('.rowbtn.split');
-  if (!merged) splitBtn.addEventListener('click', (e) => { e.stopPropagation(); splitAtCursor(item, item.segments[firstIdx], textEl); });
-  row.querySelector('.rowbtn.del').addEventListener('click', (e) => { e.stopPropagation(); deleteView(item, view); });
+  row.querySelector('.rowbtn.ai').addEventListener('click', (e) => { e.stopPropagation(); openChat(); quoteSegmentToChat(item, view); });
+  // 「更多」菜单：低频操作（合并 / 拆分 / 删除）收纳其中，点击 ⋯ 展开
+  const moreBtn = row.querySelector('.rowbtn.more');
+  const menu = row.querySelector('.rowmenu');
+  const closeMenu = () => { menu.hidden = true; moreBtn.setAttribute('aria-expanded', 'false'); };
+  moreBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = menu.hidden;
+    closeAllRowMenus();                       // 同一时刻只开一个行菜单
+    menu.hidden = !open;
+    moreBtn.setAttribute('aria-expanded', String(open));
+  });
+  const mergeItem = menu.querySelector('.rowmenu-item.merge');
+  if (!merged) mergeItem.addEventListener('click', (e) => { e.stopPropagation(); closeMenu(); mergeWithPrev(item, item.segments[firstIdx]); });
+  const splitItem = menu.querySelector('.rowmenu-item.split');
+  if (!merged) splitItem.addEventListener('click', (e) => { e.stopPropagation(); closeMenu(); splitAtCursor(item, item.segments[firstIdx], textEl); });
+  menu.querySelector('.rowmenu-item.del').addEventListener('click', (e) => { e.stopPropagation(); closeMenu(); deleteView(item, view); });
   return row;
 }
+
+// 关闭所有已展开的行内「更多」菜单（打开新菜单或点击空白处时调用）
+function closeAllRowMenus() {
+  document.querySelectorAll('.rowmenu:not([hidden])').forEach(m => {
+    m.hidden = true;
+    const btn = m.parentElement?.querySelector('.rowbtn.more');
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+  });
+}
+// 点击页面任意其他位置时收起行菜单（挂一次即可）
+document.addEventListener('click', (e) => {
+  if (!e.target.closest || !e.target.closest('.rowmore')) closeAllRowMenus();
+});
 
 export function setActiveSeg(row) {
   if (state.activeSegEl) state.activeSegEl.classList.remove('active');
@@ -206,7 +238,7 @@ export function splitAtCursor(item, seg, textEl) {
     range.setEnd(sel.anchorNode, sel.anchorOffset);
     pos = range.toString().length;
   }
-  if (pos <= 0 || pos >= seg.text.length) { alert('请把光标放在文本中间要拆分的位置'); return; }
+  if (pos <= 0 || pos >= seg.text.length) { toast('请把光标放在文本中间要拆分的位置', 'warn'); return; }
   pushUndo();
   const idx = item.segments.indexOf(seg);
   const mid = +(seg.start + (seg.end-seg.start) * (pos/seg.text.length)).toFixed(1);

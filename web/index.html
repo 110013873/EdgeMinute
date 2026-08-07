@@ -22,7 +22,7 @@
         </div>
         <div class="hp-toolbar">
           <div class="hp-search">
-            <span class="hp-search-ic">🔍</span>
+            <span class="hp-search-ic"><svg class="ic" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
             <input type="text" id="historySearch" placeholder="搜索历史会议…" autocomplete="off">
           </div>
           <button class="hp-new" id="historyNewBtn" title="新建会议（清空当前工作区）">＋ 新建</button>
@@ -109,7 +109,7 @@
           <div class="meta-panel" id="metaPanel">
             <div class="mp-body">
               <div class="meta-import">
-                <button class="btn-import-agenda" id="importAgendaBtn" title="上传会议议程 Word 文档，自动提取并填充">📄 导入议程</button>
+                <button class="btn-import-agenda" id="importAgendaBtn" title="上传会议议程 Word 文档，自动提取并填充"><svg class="ic" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>导入议程</button>
                 <input type="file" id="agendaFile" accept=".docx" hidden>
                 <div class="mi-status" id="agendaStatus"></div>
               </div>
@@ -117,9 +117,11 @@
               <div class="meta-field"><label>日期时间</label><input type="datetime-local" data-k="date" style="color-scheme:dark;"></div>
               <div class="meta-field"><label>地点</label><input data-k="place" placeholder="如：3楼会议室"></div>
               <div class="meta-field">
-                <label>参会人员</label>
+                <div class="attendee-head">
+                  <label>参会人员</label>
+                  <button class="btn-add-attendee" id="addAttendeeBtn"><svg class="ic" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>添加参会人</button>
+                </div>
                 <div class="attendee-editor" id="attendeeEditor"></div>
-                <button class="btn-add-attendee" id="addAttendeeBtn">＋ 添加参会人</button>
               </div>
               <div class="meta-field"><label>议程</label><textarea class="agenda-input" data-k="agenda" placeholder="本次会议议程…"></textarea></div>
             </div>
@@ -136,11 +138,9 @@
 
         <div class="tab-pane" id="tabTranscript">
         <div class="toolbar">
+          <!-- 视图：查找 / 合并 / 筛选 -->
           <div class="group">
-            <button class="btn-plain" id="findToggleBtn" title="查找 / 替换 (Ctrl+F)">🔍 查找 / 替换</button>
-          </div>
-          <div class="divider"></div>
-          <div class="group">
+            <button class="btn-plain" id="findToggleBtn" title="查找 / 替换 (Ctrl+F)"><svg class="ic" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>查找 / 替换</button>
             <label class="chk" title="把连续的同一发言人段落合并显示"><input type="checkbox" id="mergeToggle" checked> 合并连续段</label>
             <span class="filter-ico" title="按发言人筛选" aria-hidden="true">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/></svg>
@@ -150,17 +150,23 @@
             </select>
           </div>
           <div class="spacer"></div>
+          <!-- 标注：映射发言人 / 声纹库 / 热词库 -->
           <div class="group">
-            <button class="btn-plain" id="spkBtn" title="映射发言人">🏷️ 映射发言人</button>
-            <button class="btn-plain" id="vpBtn" title="声纹库：登记声纹后开会自动识别发言人">⚑ 声纹库</button>
-            <button class="btn-plain" id="hwBtn" title="热词干预">🔤 热词库</button>
-            <button class="btn-plain" id="undoBtn" title="撤销 (Ctrl+Z)" disabled>↶</button>
-            <button class="btn-plain" id="redoBtn" title="重做 (Ctrl+Y)" disabled>↷</button>
+            <button class="btn-plain" id="spkBtn" title="映射发言人"><svg class="ic" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>映射发言人</button>
+            <button class="btn-plain" id="vpBtn" title="声纹库：登记声纹后开会自动识别发言人"><svg class="ic" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>声纹库</button>
+            <button class="btn-plain" id="hwBtn" title="热词干预"><svg class="ic" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>热词库</button>
           </div>
           <div class="divider"></div>
+          <!-- 编辑：撤销 / 重做 -->
           <div class="group">
-            <button class="btn-plain" id="exportOptsBtn" title="导出选项">⚙</button>
-            <button class="btn-download" id="downloadBtn" disabled>导出 ▾</button>
+            <button class="btn-icon" id="undoBtn" title="撤销 (Ctrl+Z)" disabled><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg></button>
+            <button class="btn-icon" id="redoBtn" title="重做 (Ctrl+Y)" disabled><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13"/></svg></button>
+          </div>
+          <div class="divider"></div>
+          <!-- 导出：导出选项 / 导出 -->
+          <div class="group">
+            <button class="btn-icon" id="exportOptsBtn" title="导出选项"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+            <button class="btn-download" id="downloadBtn" disabled><svg class="ic" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>导出 <svg class="ic" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></button>
           </div>
         </div>
 
@@ -179,30 +185,30 @@
     <!-- 底部全局播放栏 -->
     <div class="playbar" id="playbar" style="display:none;">
       <span class="now-file" id="nowFile">未选择音频</span>
-      <button id="pbBack" title="后退 5 秒 (Ctrl+←)">« 5s</button>
+      <button id="pbBack" title="后退 5 秒 (Ctrl+←)"><svg class="ic" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5"/></svg>5s</button>
       <audio id="globalAudio" controls preload="metadata"></audio>
-      <button id="pbFwd" title="前进 5 秒 (Ctrl+→)">5s »</button>
+      <button id="pbFwd" title="前进 5 秒 (Ctrl+→)">5s<svg class="ic" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg></button>
       <span style="margin-left:4px;">速度</span>
-      <button id="pbRateDown" title="减速">−</button>
+      <button id="pbRateDown" title="减速"><svg class="ic" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
       <span class="rate-val" id="rateVal">1.0×</span>
-      <button id="pbRateUp" title="加速">+</button>
-      <button id="pbLoop" title="循环当前段">⟳ 循环</button>
+      <button id="pbRateUp" title="加速"><svg class="ic" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+      <button id="pbLoop" title="循环当前段"><svg class="ic" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>循环</button>
       <span class="seg-grp">
-        <button id="pbPrev" title="上一段 (Alt+↑)">↑段</button>
-        <button id="pbNext" title="下一段 (Alt+↓)">↓段</button>
+        <button id="pbPrev" title="上一段 (Alt+↑)"><svg class="ic" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>段</button>
+        <button id="pbNext" title="下一段 (Alt+↓)"><svg class="ic" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>段</button>
       </span>
     </div>
   </div>
 
   <!-- 智能问答：浮动按钮 + 面板 -->
-  <button id="chatFab" class="chat-fab" title="智能问答">💬</button>
+  <button id="chatFab" class="chat-fab" title="智能问答"><svg class="ic" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></button>
   <div id="chatPanel" class="chat-panel">
     <div class="chat-head">
       <span class="ch-dot"></span>
       <span>智能问答</span>
       <span class="ch-spacer"></span>
-      <button class="ch-btn" id="chatClear" title="清空对话">🗑</button>
-      <button class="ch-btn" id="chatClose" title="收起">✕</button>
+      <button class="ch-btn" id="chatClear" title="清空对话"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+      <button class="ch-btn" id="chatClose" title="收起"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div class="chat-body" id="chatBody">
       <p class="chat-empty" id="chatEmpty">先完成音频转写，<br>即可就会议内容向 AI 提问。<br><br>例如：总结本次会议的关键决议 / 列出待办事项</p>
@@ -215,14 +221,14 @@
 
   <!-- 查找 / 替换 弹窗（非模态，仿主流编辑器） -->
   <div id="findPop" class="find-widget" style="display:none;">
-    <button class="fw-expand" id="fwExpand" title="展开替换" aria-label="展开替换">▸</button>
+    <button class="fw-expand" id="fwExpand" title="展开替换" aria-label="展开替换"><svg class="ic" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg></button>
     <div class="fw-body">
       <div class="fw-row">
         <input type="text" id="findSearchInput" placeholder="查找" autocomplete="off">
         <span class="fw-count" id="findCount">无结果</span>
-        <button class="fw-btn" id="findPrevBtn" title="上一个 (Shift+Enter)" disabled>‹</button>
-        <button class="fw-btn" id="findNextBtn" title="下一个 (Enter)" disabled>›</button>
-        <button class="fw-btn" id="findCloseBtn" title="关闭 (Esc)">✕</button>
+        <button class="fw-btn" id="findPrevBtn" title="上一个 (Shift+Enter)" disabled><svg class="ic" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="18 15 12 9 6 15"/></svg></button>
+        <button class="fw-btn" id="findNextBtn" title="下一个 (Enter)" disabled><svg class="ic" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></button>
+        <button class="fw-btn" id="findCloseBtn" title="关闭 (Esc)"><svg class="ic" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
       </div>
       <div class="fw-row fw-replace-row" id="fwReplaceRow">
         <input type="text" id="findReplaceInput" placeholder="替换" autocomplete="off">
@@ -259,19 +265,19 @@
   </div>
   <!-- 导出方式菜单（导出按钮下拉） -->
   <div id="exportMenuPop" class="popover export-menu" style="display:none;min-width:200px;">
-    <button type="button" class="export-menu-item" id="exportMinutesItem">导出会议纪要</button>
-    <button type="button" class="export-menu-item" id="exportTranscriptItem">导出文字发言稿</button>
+    <button type="button" class="export-menu-item" id="exportMinutesItem">导出会议纪要(.docx)</button>
+    <button type="button" class="export-menu-item" id="exportTranscriptItem">导出文字发言稿(.txt)</button>
   </div>
   <!-- 新建会议对话框：填写议程信息即建档（标题必填） -->
   <dialog id="newMeetingDialog" class="nm-dialog">
     <form method="dialog" class="nm-form" id="newMeetingForm">
       <div class="nm-head">
         <h3>新建会议</h3>
-        <button type="button" class="nm-x" id="nmCancel" title="取消">✕</button>
+        <button type="button" class="nm-x" id="nmCancel" title="取消"><svg class="ic" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
       </div>
       <div class="nm-body">
         <div class="meta-import">
-          <button type="button" class="btn-import-agenda" id="nmImportBtn" title="上传会议议程 Word 文档，自动提取并填充">📄 导入议程</button>
+          <button type="button" class="btn-import-agenda" id="nmImportBtn" title="上传会议议程 Word 文档，自动提取并填充"><svg class="ic" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>导入议程</button>
           <input type="file" id="nmAgendaFile" accept=".docx" hidden>
           <div class="mi-status" id="nmAgendaStatus"></div>
         </div>
@@ -283,9 +289,11 @@
         <div class="meta-field"><label>会议时间</label><input type="datetime-local" id="nm-date" style="color-scheme:dark;"></div>
         <div class="meta-field"><label>地点</label><input id="nm-place" placeholder="如：3楼会议室"></div>
         <div class="meta-field">
-          <label>参会人员</label>
+          <div class="attendee-head">
+            <label>参会人员</label>
+            <button type="button" class="btn-add-attendee" id="nmAddAttendeeBtn"><svg class="ic" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>添加参会人</button>
+          </div>
           <div class="attendee-editor" id="nmAttendeeEditor"></div>
-          <button type="button" class="btn-add-attendee" id="nmAddAttendeeBtn">＋ 添加参会人</button>
         </div>
         <div class="meta-field"><label>议程</label><textarea class="agenda-input" id="nm-agenda" placeholder="本次会议议程…"></textarea></div>
       </div>

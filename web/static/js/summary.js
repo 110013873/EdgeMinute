@@ -7,6 +7,7 @@ import { escapeHtml, renderMarkdown, renderResolutions } from './util.js';
 import { hexToDim } from './speakers.js';
 import { chatSegments } from './chat.js';
 import { scheduleAutoSave } from './autosave.js';
+import { icon } from './icons.js';
 
 const summaryView = $('summaryView');
 
@@ -53,26 +54,23 @@ export function renderSummary() {
   const sec = summaryView.querySelector('#sumSections');
   if (!state.summary) return;   // busy 且尚无旧结果时，仅显示操作条
   const summary = state.summary;
-  sec.appendChild(buildSumSection('overview', '📋 会议概要',
+  sec.appendChild(buildSumSection('overview', 'clipboard', '会议概要',
     summary.overview ? `<div class="bubble md">${renderMarkdown(summary.overview)}</div>` : '<span class="empty-note">（无概要）</span>',
     !summary.overview));
-  sec.appendChild(buildSumSection('speakers', '🗣 各发言人观点', buildSpeakersHtml(summary.speakers),
+  sec.appendChild(buildSumSection('speakers', 'mic', '各发言人观点', buildSpeakersHtml(summary.speakers),
     !(summary.speakers && summary.speakers.length)));
   const resolutionsHtml = renderResolutions(summary.resolutions);
-  sec.appendChild(buildSumSection('resolutions', '✅ 会议决议',
+  sec.appendChild(buildSumSection('resolutions', 'checkCircle', '会议决议',
     resolutionsHtml ? `<div class="bubble md">${resolutionsHtml}</div>` : '<span class="empty-note">（无明确决议）</span>',
     !resolutionsHtml));
 }
 
-function buildSumSection(key, title, bodyHtml, isEmpty) {
+function buildSumSection(key, iconName, label, bodyHtml, isEmpty) {
   const div = document.createElement('div');
   div.className = 'sum-section' + (summaryOpen[key] ? '' : ' collapsed');
-  const sp = title.indexOf(' ');                 // 首个空格前为 emoji 图标，之后为标题文字
-  const icon = sp > 0 ? title.slice(0, sp) : '';
-  const label = (sp > 0 ? title.slice(sp + 1) : title).trim();
   div.innerHTML = `
     <div class="sum-head">
-      <span class="chev">▾</span><span class="sum-icon">${icon}</span><span>${escapeHtml(label)}</span>
+      <span class="chev"><svg class="ic" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></span><span class="sum-icon">${icon(iconName, 16)}</span><span>${escapeHtml(label)}</span>
     </div>
     <div class="sum-body${isEmpty ? ' empty-note' : ''}">${bodyHtml}</div>`;
   div.querySelector('.sum-head').addEventListener('click', () => {

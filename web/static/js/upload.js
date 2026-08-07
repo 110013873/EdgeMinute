@@ -15,10 +15,11 @@ import { $, dropzone, fileInput, fileListEl, runAllBtn, downloadBtn } from './do
 import { escapeHtml, escapeAttr, formatTime } from './util.js';
 import { loadIntoPlayer } from './player.js';
 import { persistFiles, uploadAudio } from './history-io.js';
+import { toast } from './ui-feedback.js';
 
 export async function addFiles(fileListRaw) {
   const id = state.currentMeetingId;
-  if (id == null) { alert('请先新建会议'); return; }
+  if (id == null) { toast('请先新建会议', 'warn'); return; }
 
   let firstNew = null;
   const added = [];
@@ -122,7 +123,7 @@ export async function transcribeOne(id) {
   const meetingId = state.currentMeetingId;
   const idx = state.files.indexOf(item);
   if (meetingId == null || idx < 0) return;
-  if (!item.has_audio) { alert('音频尚未上传完成，请稍候再试'); return; }
+  if (!item.has_audio) { toast('音频尚未上传完成，请稍候再试', 'warn'); return; }
 
   const hotword = $('hotwordInput').value.replace(/\s+/g,' ').trim();
   // 乐观置为排队中（SSE 首帧/后续帧会纠正为准确状态）

@@ -10,6 +10,7 @@
 import { normalizeMeta } from './state.js';
 import { $ } from './dom.js';
 import { escapeAttr, toDatetimeLocal, nowDatetimeLocal } from './util.js';
+import { icon } from './icons.js';
 
 const dialog = $('newMeetingDialog');
 const editor = $('nmAttendeeEditor');
@@ -23,7 +24,7 @@ function renderAttendees() {
       <input class="a-name"  data-f="name"  value="${escapeAttr(a.name)}"  placeholder="姓名">
       <input class="a-unit"  data-f="unit"  value="${escapeAttr(a.unit)}"  placeholder="单位">
       <input class="a-title" data-f="title" value="${escapeAttr(a.title)}" placeholder="职务">
-      <button type="button" class="a-del" data-del="${i}" title="删除">✕</button>
+      <button type="button" class="a-del" data-del="${i}" title="删除">${icon('x', 15)}</button>
     </div>`).join('');
 }
 

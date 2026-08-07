@@ -5,6 +5,7 @@ import { state } from './state.js';
 import { $ } from './dom.js';
 import { renderMarkdown } from './util.js';
 import { speakerLabel } from './speakers.js';
+import { toast } from './ui-feedback.js';
 
 const chatFab = $('chatFab');
 const chatPanel = $('chatPanel');
@@ -71,7 +72,7 @@ async function sendChat() {
   const text = chatInput.value.trim();
   if (!text) return;
   const segments = chatSegments();
-  if (!segments.length) { alert('请先完成音频转写，AI 才能基于会议内容回答'); return; }
+  if (!segments.length) { toast('请先完成音频转写，AI 才能基于会议内容回答', 'warn'); return; }
 
   state.chatHistory.push({ role: 'user', content: text });
   chatInput.value = '';
