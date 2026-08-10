@@ -519,9 +519,11 @@
   .seg .rowbtn:hover { opacity: 1; border-color: var(--accent); }
   .seg .rowbtn.flag:hover { background: rgba(242,193,78,0.16); color: var(--warn); border-color: var(--warn); }
   .seg .rowbtn.ai:hover { background: var(--accent-dim); color: var(--accent); }
+  .seg .rowbtn.merge:hover:not(:disabled) { background: var(--accent-dim); color: var(--accent); }
+  .seg .rowbtn:disabled { opacity: 0.35; cursor: not-allowed; }
   .seg .rowbtn.more:hover { background: var(--panel-alt); color: var(--accent); border-color: var(--accent); }
 
-  /* 行内「更多」菜单：低频段操作（合并/拆分/删除）收纳；[hidden] 必须显式 none 覆盖 display:flex */
+  /* 行内「更多」菜单：低频段操作（拆分/删除）收纳；[hidden] 必须显式 none 覆盖 display:flex */
   .seg .rowmore { position: relative; display: inline-flex; }
   .seg .rowmenu[hidden] { display: none; }
   .seg .rowmenu {

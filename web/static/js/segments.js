@@ -94,10 +94,10 @@ export function buildSegRow(item, view) {
     <div class="rowbtns">
       <button class="rowbtn flag" title="标注声纹">${icon('flag', 15)}</button>
       <button class="rowbtn ai" title="AI问答">${icon('message', 15)}</button>
+      <button class="rowbtn merge" title="与上一段合并"${merged ? ' disabled' : ''}>${icon('mergeUp', 15)}</button>
       <div class="rowmore">
         <button class="rowbtn more" title="更多操作" aria-haspopup="true" aria-expanded="false">${icon('more', 15)}</button>
         <div class="rowmenu" hidden>
-          <button class="rowmenu-item merge"${merged ? ' disabled' : ''}>${icon('mergeUp', 14)}<span>与上一段合并</span></button>
           <button class="rowmenu-item split"${merged ? ' disabled' : ''}>${icon('split', 14)}<span>${merged ? '合并下不可拆分' : '在光标处拆分'}</span></button>
           <button class="rowmenu-item del">${icon('trash', 14)}<span>删除此段</span></button>
         </div>
@@ -121,7 +121,10 @@ export function buildSegRow(item, view) {
   // 常用操作外置：标注声纹 / AI 提问
   row.querySelector('.rowbtn.flag').addEventListener('click', (e) => { e.stopPropagation(); openAnnotatePopover(item, item.segments[firstIdx], e.currentTarget); });
   row.querySelector('.rowbtn.ai').addEventListener('click', (e) => { e.stopPropagation(); openChat(); quoteSegmentToChat(item, view); });
-  // 「更多」菜单：低频操作（合并 / 拆分 / 删除）收纳其中，点击 ⋯ 展开
+  // 「与上一段合并」外置到按钮栏（AI问答右侧）：合并行禁用（多段行不可再合并）
+  const mergeBtn = row.querySelector('.rowbtn.merge');
+  if (!merged) mergeBtn.addEventListener('click', (e) => { e.stopPropagation(); mergeWithPrev(item, item.segments[firstIdx]); });
+  // 「更多」菜单：低频操作（拆分 / 删除）收纳其中，点击 ⋯ 展开
   const moreBtn = row.querySelector('.rowbtn.more');
   const menu = row.querySelector('.rowmenu');
   const closeMenu = () => { menu.hidden = true; moreBtn.setAttribute('aria-expanded', 'false'); };
@@ -132,8 +135,6 @@ export function buildSegRow(item, view) {
     menu.hidden = !open;
     moreBtn.setAttribute('aria-expanded', String(open));
   });
-  const mergeItem = menu.querySelector('.rowmenu-item.merge');
-  if (!merged) mergeItem.addEventListener('click', (e) => { e.stopPropagation(); closeMenu(); mergeWithPrev(item, item.segments[firstIdx]); });
   const splitItem = menu.querySelector('.rowmenu-item.split');
   if (!merged) splitItem.addEventListener('click', (e) => { e.stopPropagation(); closeMenu(); splitAtCursor(item, item.segments[firstIdx], textEl); });
   menu.querySelector('.rowmenu-item.del').addEventListener('click', (e) => { e.stopPropagation(); closeMenu(); deleteView(item, view); });
