@@ -6,6 +6,9 @@ import { $ } from './dom.js';
 import { escapeAttr, toDatetimeLocal } from './util.js';
 import { scheduleAutoSave } from './autosave.js';
 import { icon } from './icons.js';
+import { pickContacts } from './contact-picker.js';
+import { mergeAttendees } from './attendee-merge.js';
+import { toast } from './ui-feedback.js';
 
 const attendeeEditor = $('attendeeEditor');
 
@@ -136,6 +139,18 @@ export function initMetaPanel() {
     attendeeEditor.scrollTop = attendeeEditor.scrollHeight;
     const rows = attendeeEditor.querySelectorAll('.attendee-row');
     rows[rows.length - 1]?.querySelector('.a-name')?.focus();
+  });
+
+  // 从通讯录批量导入参会人：选人 → 同名+同单位去重合并 → 不可变写回 meta
+  $('importContactsBtn').addEventListener('click', async () => {
+    const chosen = await pickContacts();
+    if (!chosen.length) return;
+    const { merged, added, skipped } = mergeAttendees(state.meta.attendees, chosen);
+    if (!added) { toast(`未导入：所选 ${skipped} 人均已在参会名单中`, 'warn'); return; }
+    state.meta = { ...state.meta, attendees: merged };
+    renderAttendees();
+    scheduleAutoSave();
+    toast(`已导入 ${added} 人${skipped ? `，跳过 ${skipped} 人（已存在）` : ''}`, 'ok');
   });
 
   // 拖拽调整参会人顺序：以行首「⋮⋮」把手为拖拽源，行为放置目标，落点前后插入

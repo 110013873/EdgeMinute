@@ -127,7 +127,6 @@ export function initExport() {
   const exportOptsBtn = $('exportOptsBtn');
   const exportOptsPop = $('exportOptsPop');
   const exportMenuPop = $('exportMenuPop');
-  const spkPop = $('spkPop');
 
   const closeExportMenu = () => { exportMenuPop.style.display = 'none'; };
 
@@ -154,6 +153,5 @@ export function initExport() {
   document.addEventListener('click', (e) => {
     if (exportOptsPop.style.display === 'block' && !exportOptsPop.contains(e.target) && e.target !== exportOptsBtn) exportOptsPop.style.display = 'none';
     if (exportMenuPop.style.display === 'block' && !exportMenuPop.contains(e.target) && e.target !== downloadBtn) closeExportMenu();
-    if (spkPop.style.display === 'block' && !spkPop.contains(e.target) && e.target !== $('spkBtn')) spkPop.style.display = 'none';
   });
 }

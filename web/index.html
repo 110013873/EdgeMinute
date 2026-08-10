@@ -45,7 +45,7 @@
             </div>
             <div class="es-feat">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="8" y1="18" x2="16" y2="18"/><line x1="12" y1="22" x2="12" y2="18"/></svg>
-              <span><b>声纹比对</b><em>内置说话人分离能力，对接声纹库，可自动区分不同发言人，并直接标注参会人真实姓名。</em></span>
+              <span><b>声纹比对</b><em>内置说话人分离能力，对接通讯录声纹，可自动区分不同发言人，并直接标注参会人真实姓名。</em></span>
             </div>
             <div class="es-feat">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2"/><line x1="12" y1="22" x2="12" y2="15.5"/><polyline points="22 8.5 12 15.5 2 8.5"/></svg>
@@ -119,6 +119,7 @@
               <div class="meta-field">
                 <div class="attendee-head">
                   <label>参会人员</label>
+                  <button class="btn-add-attendee" id="importContactsBtn" title="从通讯录批量导入参会人"><svg class="ic" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>从通讯录导入</button>
                   <button class="btn-add-attendee" id="addAttendeeBtn"><svg class="ic" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>添加参会人</button>
                 </div>
                 <div class="attendee-editor" id="attendeeEditor"></div>
@@ -150,10 +151,10 @@
             </select>
           </div>
           <div class="spacer"></div>
-          <!-- 标注：映射发言人 / 声纹库 / 热词库 -->
+          <!-- 标注：映射发言人 / 通讯录 / 热词库 -->
           <div class="group">
             <button class="btn-plain" id="spkBtn" title="映射发言人"><svg class="ic" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>映射发言人</button>
-            <button class="btn-plain" id="vpBtn" title="声纹库：登记声纹后开会自动识别发言人"><svg class="ic" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>声纹库</button>
+            <button class="btn-plain" id="contactsBtn" title="通讯录：预录常用联系人，可一键导入参会人员；登记声纹后开会自动识别发言人"><svg class="ic" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>通讯录</button>
             <button class="btn-plain" id="hwBtn" title="热词干预"><svg class="ic" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>热词库</button>
           </div>
           <div class="divider"></div>
@@ -241,12 +242,15 @@
   <!-- 发言人弹出面板 -->
   <div id="spkPop" class="popover" style="display:none;"></div>
 
-  <!-- 声纹库管理弹层（工具栏 ⚑ 声纹库 触发；内容由 voiceprints.js 渲染） -->
-  <div id="vpPop" class="popover" style="display:none;min-width:340px;"></div>
+  <!-- 通讯录管理弹层（工具栏 通讯录 触发；内容由 contacts.js 渲染） -->
+  <div id="contactsPop" class="popover" style="display:none;min-width:340px;"></div>
 
   <!-- 热词干预弹层（工具栏 🔤 热词 触发） -->
   <div id="hotwordPop" class="popover" style="display:none;min-width:300px;">
-    <div class="pop-title">热词干预</div>
+    <div class="pop-head">
+      <div class="pop-title">热词干预</div>
+      <button type="button" class="pop-x" data-modal-close title="关闭"><svg class="ic" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
     <p class="hw-hint">每行或空格分隔一个词，转写时优先识别<br>适合人名、地名、专有名词</p>
     <textarea id="hotwordInput" placeholder="例：张三 李四&#10;北京总部&#10;产品发布会"></textarea>
     <div class="hw-actions">
@@ -291,6 +295,7 @@
         <div class="meta-field">
           <div class="attendee-head">
             <label>参会人员</label>
+            <button type="button" class="btn-add-attendee" id="nmImportContactsBtn" title="从通讯录批量导入参会人"><svg class="ic" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>从通讯录导入</button>
             <button type="button" class="btn-add-attendee" id="nmAddAttendeeBtn"><svg class="ic" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>添加参会人</button>
           </div>
           <div class="attendee-editor" id="nmAttendeeEditor"></div>

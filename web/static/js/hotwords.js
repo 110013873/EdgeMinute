@@ -2,6 +2,7 @@
 // 热词持久化
 // ============================================================
 import { $ } from './dom.js';
+import { openModal, closeModal, isModalOpen } from './modal.js';
 
 const hotwordInput = $('hotwordInput');
 const hwSaveBtn = $('hwSaveBtn');
@@ -42,22 +43,13 @@ export function initHotwords() {
   hwSaveBtn.addEventListener('click', saveHotwords);
   hotwordInput.addEventListener('input', () => setHwStatus('', ''));
 
-  // 工具栏「🔤 热词」按钮：切换弹层，锚定到按钮下方
+  // 工具栏「🔤 热词」按钮：以页面居中弹窗展示（参考「新建会议」观感）
   const hwBtn = $('hwBtn');
   const hotwordPop = $('hotwordPop');
   hwBtn.addEventListener('click', () => {
-    if (hotwordPop.style.display === 'block') { hotwordPop.style.display = 'none'; return; }
+    if (isModalOpen(hotwordPop)) { closeModal(); return; }
     setHwStatus('', '');
-    const r = hwBtn.getBoundingClientRect();
-    hotwordPop.style.display = 'block';
-    hotwordPop.style.top = (r.bottom + 6) + 'px';
-    hotwordPop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 320)) + 'px';
+    openModal(hotwordPop);
     hotwordInput.focus();
-  });
-  // 点击弹层外部关闭
-  document.addEventListener('click', (e) => {
-    if (hotwordPop.style.display !== 'block') return;
-    if (hotwordPop.contains(e.target) || hwBtn.contains(e.target)) return;
-    hotwordPop.style.display = 'none';
   });
 }

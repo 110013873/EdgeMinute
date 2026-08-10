@@ -135,6 +135,21 @@ def attendees_to_lines(items: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _contact_key(name: str, unit: str) -> tuple[str, str]:
+    """判重键：同名+同单位（姓名大小写不敏感、去空白；单位去空白）。"""
+    return ((name or "").strip().casefold(), (unit or "").strip())
+
+
+def contact_is_duplicate(existing: list[dict], name: str, unit: str = "") -> bool:
+    """在既有联系人/参会人列表中，是否已存在「同名+同单位」的条目（纯函数）。
+
+    existing 为 [{name, unit, ...}] 列表。姓名大小写不敏感、两端去空白后比较。
+    供前端导入判重的对照逻辑参照，也可在后端二次校验；不做拦截，仅判定。
+    """
+    target = _contact_key(name, unit)
+    return any(_contact_key(e.get("name", ""), e.get("unit", "")) == target for e in existing or [])
+
+
 # 无单位参会人归入的分组名
 _NO_UNIT_GROUP = "其他"
 

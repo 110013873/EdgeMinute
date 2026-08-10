@@ -478,11 +478,32 @@
     background: var(--bg); border: 1px solid var(--accent); border-radius: 6px;
     padding: 1px 5px; outline: none; box-sizing: border-box;
   }
+  /* 编辑发言人时放开裁剪并建立定位上下文，供自绘下拉面板绝对定位 */
+  .seg .speaker.editing { overflow: visible; position: relative; }
+  .seg .spk-suggest {
+    position: absolute; top: calc(100% + 4px); left: 0; z-index: 40;
+    min-width: 160px; max-width: 300px; max-height: 260px; overflow-y: auto; padding: 4px;
+    background: var(--panel-alt); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+    display: flex; flex-direction: column; gap: 1px;
+  }
+  .seg .spk-suggest[hidden] { display: none; }
+  .seg .spk-suggest-item {
+    display: block; width: 100%; padding: 8px 10px; border: none; border-radius: 6px;
+    background: transparent; color: var(--text); font-size: 13px; line-height: 1.5; text-align: left;
+    cursor: pointer; white-space: nowrap;
+    transition: background 0.12s ease, color 0.12s ease;
+  }
+  .seg .spk-suggest-item:hover,
+  .seg .spk-suggest-item.active { background: var(--accent-dim); color: var(--accent); }
+  .seg .spk-suggest-empty { padding: 8px 10px; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
   .seg.playing { border-color: var(--ok); background: rgba(62,207,142,0.07); }
   .seg.playing .time { color: var(--ok); }
   .seg .text {
     line-height: 1.5; outline: none; border-radius: 5px; padding: 2px 4px; margin: -2px -4px;
   }
+  /* 可编辑文本显示插入光标；合并行只读文本继承行的 pointer（点击跳转播放） */
+  .seg .text[contenteditable="true"] { cursor: text; }
   .seg .text:focus { background: rgba(255,255,255,0.05); box-shadow: 0 0 0 1px var(--accent); }
   .seg .text mark { background: var(--warn); color: #1a1400; border-radius: 2px; padding: 0 1px; }
   .seg .text mark.current { background: var(--accent); color: #fff; }
@@ -565,6 +586,42 @@
   @media (prefers-reduced-motion: reduce) { .popover { animation: none; } }
   .popover .pop-title { font-weight: 600; margin-bottom: 4px; }
   .popover .pop-sub { color: var(--muted); font-size: 11.5px; margin-bottom: 10px; }
+
+  /* ---------- 居中弹窗（映射发言人 / 通讯录 / 热词库，参考「新建会议」观感） ---------- */
+  .modal-backdrop {
+    position: fixed; inset: 0; z-index: 70;
+    background: rgba(0,0,0,0.55); backdrop-filter: blur(2px);
+    animation: backdrop-in 0.14s ease;
+  }
+  .modal-backdrop[hidden] { display: none; }
+  @keyframes backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { .modal-backdrop { animation: none; } }
+  /* 把锚定式 .popover 改为屏幕居中的卡片；覆盖 fixed 定位与出现动画 */
+  .popover.popover-modal {
+    z-index: 71;
+    top: 50%; left: 50%; right: auto; bottom: auto;
+    transform: translate(-50%, -50%);
+    width: min(460px, calc(100vw - 40px)); max-height: calc(100vh - 80px);
+    border-radius: 12px; padding: 18px 20px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+    animation: modal-in 0.16s ease;
+  }
+  @keyframes modal-in {
+    from { opacity: 0; transform: translate(-50%, -50%) scale(0.97); }
+    to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) { .popover.popover-modal { animation: none; } }
+  /* 居中弹窗标题栏：标题 + 右上角关闭 × */
+  .popover .pop-head {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+  }
+  .popover .pop-head .pop-title { margin-bottom: 0; font-size: 16px; }
+  .popover .pop-x {
+    margin-left: auto; flex: none; border: none; background: transparent; cursor: pointer;
+    color: var(--muted); padding: 4px 6px; border-radius: 6px; line-height: 1;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .popover .pop-x:hover { background: var(--panel-alt); color: var(--text); }
   .spk-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
   .spk-row .swatch { width: 16px; height: 16px; border-radius: 5px; flex: none; }
   .spk-row .orig {
@@ -589,54 +646,117 @@
     color: var(--ok);
   }
 
-  /* ---------- 声纹库管理弹层 ---------- */
-  #vpPop .vp-hint { font-size: 11.5px; color: var(--muted); margin: 4px 0 12px; line-height: 1.5; }
-  #vpPop .vp-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
-  #vpPop .vp-person {
-    background: var(--panel-alt); border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px;
+  /* ---------- 通讯录管理弹层 ---------- */
+  /* 通讯录联系人可能很多：加宽卡片、让列表占据主要高度并可滚动 */
+  #contactsPop.popover-modal {
+    width: min(680px, calc(100vw - 40px));
+    display: flex; flex-direction: column;
+    max-height: calc(100vh - 64px);
+    /* 外层容器不滚动（覆盖 .popover 的 overflow-y:auto，避免与内部列表叠出第二条滚动条）；
+       仅 .vp-list 内部滚动，头部提示/搜索、底部添加区始终固定可见 */
+    overflow: hidden;
   }
-  #vpPop .vp-person-head { margin-bottom: 7px; }
-  #vpPop .vp-person-name { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
-  #vpPop .vp-count { font-size: 10.5px; font-weight: 500; color: var(--muted); }
-  #vpPop .vp-person-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
-  #vpPop .vp-person-ops { display: flex; gap: 6px; flex-wrap: wrap; }
-  #vpPop .vp-mini {
+  #contactsPop .ct-count {
+    margin-left: 10px; font-size: 12px; font-weight: 500; color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  #contactsPop .vp-hint { font-size: 11.5px; color: var(--muted); margin: 2px 0 10px; line-height: 1.5; }
+  #contactsPop .ct-search {
+    display: flex; align-items: center; gap: 7px; margin-bottom: 10px;
+    background: var(--panel-alt); border: 1px solid var(--border); border-radius: 8px;
+    padding: 0 10px; color: var(--muted); flex: none;
+  }
+  #contactsPop .ct-search:focus-within { border-color: var(--accent); }
+  #contactsPop .ct-search svg { flex: none; }
+  #contactsPop .ct-search input {
+    flex: 1; min-width: 0; background: transparent; border: none; outline: none;
+    color: var(--text); font-size: 13px; padding: 8px 0;
+  }
+  /* 列表：弹性占据剩余高度，联系人多时内部滚动，头尾（提示/搜索/添加区）始终可见。
+     显式 min-height 覆盖 flex 子项默认的 min-height:auto（=内容高），使列表可收缩、
+     把滚动交给自身而非撑高外层容器多出一条滚动条 */
+  #contactsPop .vp-list {
+    display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px;
+    flex: 1 1 auto; min-height: 80px; overflow-y: auto;
+    padding-right: 2px;
+  }
+  #contactsPop .vp-empty { font-size: 12.5px; color: var(--muted); padding: 22px 4px; text-align: center; }
+  /* 紧凑单行卡片：信息在左、操作在右，节省纵向空间 */
+  #contactsPop .vp-person {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--panel-alt); border: 1px solid var(--border); border-radius: 8px; padding: 8px 11px;
+  }
+  #contactsPop .vp-person.editing { display: block; }
+  #contactsPop .vp-person-info { flex: 1; min-width: 0; }
+  #contactsPop .vp-person-name { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  #contactsPop .vp-count { font-size: 10.5px; font-weight: 500; color: var(--muted); display: inline-flex; align-items: center; gap: 3px; }
+  #contactsPop .vp-count.vp-novoice { color: var(--muted); opacity: 0.7; }
+  #contactsPop .vp-person-meta {
+    font-size: 11px; color: var(--muted); margin-top: 2px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #contactsPop .vp-person-ops { display: flex; gap: 6px; flex: none; }
+  #contactsPop .vp-mini {
     background: var(--accent-dim); color: var(--accent); border: none; border-radius: 6px;
-    padding: 4px 10px; font-size: 11.5px; font-weight: 600; cursor: pointer;
+    padding: 5px 10px; font-size: 11.5px; font-weight: 600; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 3px; white-space: nowrap;
   }
-  #vpPop .vp-mini:hover { background: var(--accent); color: #fff; }
-  #vpPop .vp-mini.danger { background: rgba(255, 107, 107, 0.14); color: var(--err); }
-  #vpPop .vp-mini.danger:hover { background: var(--err); color: #fff; }
-  #vpPop .vp-edit-form { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
-  #vpPop .vp-edit-row { display: flex; align-items: center; gap: 8px; }
-  #vpPop .vp-edit-label { font-size: 12px; color: var(--muted); flex: none; width: 32px; text-align: right; }
-  #vpPop .vp-edit-inp { flex: 1; min-width: 0; margin: 0; }
-  #vpPop .vp-edit-ops { display: flex; gap: 6px; margin-top: 4px; }
-  #vpPop .vp-enroll { border-top: 1px solid var(--border); padding-top: 12px; }
-  #vpPop .vp-enroll-title { font-size: 12px; font-weight: 600; margin-bottom: 8px; }
-  #vpPop .vp-enroll-row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
-  #vpPop .vp-inp {
+  #contactsPop .vp-mini:hover { background: var(--accent); color: #fff; }
+  #contactsPop .vp-mini.danger { background: rgba(255, 107, 107, 0.14); color: var(--err); }
+  #contactsPop .vp-mini.danger:hover { background: var(--err); color: #fff; }
+  #contactsPop .vp-edit-form { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+  #contactsPop .vp-edit-row { display: flex; align-items: center; gap: 8px; }
+  #contactsPop .vp-edit-label { font-size: 12px; color: var(--muted); flex: none; width: 32px; text-align: right; }
+  #contactsPop .vp-edit-inp { flex: 1; min-width: 0; margin: 0; }
+  #contactsPop .vp-edit-ops { display: flex; gap: 6px; margin-top: 4px; }
+  #contactsPop .vp-enroll { border-top: 1px solid var(--border); padding-top: 12px; flex: none; }
+  #contactsPop .vp-enroll-title { font-size: 12px; font-weight: 600; margin-bottom: 8px; }
+  #contactsPop .vp-enroll-row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
+  #contactsPop .vp-inp {
     width: 100%; background: var(--panel-alt); border: 1px solid var(--border); color: var(--text);
     border-radius: 6px; padding: 7px 9px; font-size: 12.5px; outline: none;
   }
-  #vpPop .vp-enroll-row .vp-inp { flex: 1; min-width: 0; }
-  #vpPop .vp-inp:focus { border-color: var(--accent); }
+  #contactsPop .vp-enroll-row .vp-inp { flex: 1; min-width: 0; }
+  #contactsPop .vp-inp:focus { border-color: var(--accent); }
   /* 自定义文件选择按钮（隐藏原生控件，暗色主题下原生控件几乎不可见） */
-  #vpPop .vp-file-btn {
+  #contactsPop .vp-file-btn {
     flex: none; background: var(--accent-dim); color: var(--accent); border: 1px solid var(--accent-dim);
     border-radius: 6px; padding: 7px 12px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
     display: inline-flex; align-items: center; gap: 5px;
   }
-  #vpPop .vp-file-btn:hover { background: var(--accent); color: #fff; }
-  #vpPop .vp-file-name {
+  #contactsPop .vp-file-btn:hover { background: var(--accent); color: #fff; }
+  #contactsPop .vp-file-btn.disabled { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
+  #contactsPop .vp-file-name {
     flex: 1; min-width: 0; font-size: 11.5px; color: var(--muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  #vpPop .btn-download { border: none; border-radius: 6px; padding: 7px 16px; font-size: 12px; font-weight: 600; cursor: pointer; flex: none; }
-  #vpPop .btn-download:disabled { opacity: 0.5; cursor: not-allowed; }
-  #vpPop .vp-status { font-size: 11.5px; color: var(--muted); margin-top: 10px; min-height: 14px; }
-  #vpPop .vp-status.ok { color: var(--ok); }
-  #vpPop .vp-status.err { color: var(--err); }
+  #contactsPop .btn-download { border: none; border-radius: 6px; padding: 7px 16px; font-size: 12px; font-weight: 600; cursor: pointer; flex: none; }
+  #contactsPop .btn-download:disabled { opacity: 0.5; cursor: not-allowed; }
+  #contactsPop .vp-status { font-size: 11.5px; color: var(--muted); margin-top: 10px; min-height: 14px; }
+  #contactsPop .vp-status.ok { color: var(--ok); }
+  #contactsPop .vp-status.err { color: var(--err); }
+
+  /* ---------- 通讯录选人弹窗（导入参会人）---------- */
+  .cp-dialog .cp-search {
+    width: 100%; background: var(--panel-alt); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 8px 10px; font-size: 13px; outline: none;
+  }
+  .cp-dialog .cp-search:focus { border-color: var(--accent); }
+  .cp-dialog .cp-list { display: flex; flex-direction: column; gap: 4px; max-height: 46vh; overflow-y: auto; }
+  .cp-dialog .cp-row {
+    display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 7px;
+    cursor: pointer; border: 1px solid transparent;
+  }
+  .cp-dialog .cp-row:hover { background: var(--panel-alt); }
+  .cp-dialog .cp-check { flex: none; width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
+  .cp-dialog .cp-name { font-size: 13px; font-weight: 600; flex: none; }
+  .cp-dialog .cp-voice { display: inline-flex; align-items: center; color: var(--accent); flex: none; }
+  .cp-dialog .cp-meta {
+    font-size: 11.5px; color: var(--muted); margin-left: auto; text-align: right;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55%;
+  }
+  .cp-dialog .cp-empty { font-size: 12.5px; color: var(--muted); padding: 16px 4px; text-align: center; }
+  .cp-dialog .cp-count { font-size: 12px; color: var(--muted); margin-right: auto; }
 
   /* ---------- 标注声纹弹层 ---------- */
   #vpAnnotatePop .vp-annot-body { max-height: 300px; overflow-y: auto; }
@@ -780,7 +900,7 @@
   }
   .chat-msg.user .role { background: var(--accent); color: #fff; }
   .chat-msg.assistant .role {
-    background: var(--panel-alt); color: var(--text); border: 1px solid var(--border);
+    background: var(--accent-dim); color: var(--accent); border: 1px solid var(--accent);
   }
   .chat-msg .bubble {
     padding: 9px 12px; border-radius: 10px; font-size: 13.5px; line-height: 1.55;

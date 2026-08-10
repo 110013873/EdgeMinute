@@ -10,6 +10,7 @@ import { renderResults } from './segments.js';
 import { pushUndo } from './undo.js';
 import { scheduleAutoSave } from './autosave.js';
 import { icon } from './icons.js';
+import { openModal, closeModal, isModalOpen } from './modal.js';
 
 const spkPop = $('spkPop');
 
@@ -41,7 +42,10 @@ export function renderSpkPop() {
     </div>`;
   }).join('') || '<div class="pop-sub">转写后才会出现发言人</div>';
   spkPop.innerHTML = `
-    <div class="pop-title">映射发言人</div>
+    <div class="pop-head">
+      <div class="pop-title">映射发言人</div>
+      <button type="button" class="pop-x" data-modal-close title="关闭">${icon('x', 17)}</button>
+    </div>
     <div class="pop-sub">${attendees.length ? '可从参会人员下拉选择，或直接输入自定义名称' : '填写会议信息中的参会人员后，此处可下拉选择'}</div>
     ${rows}
     <div class="pop-actions">
@@ -66,7 +70,7 @@ export function renderSpkPop() {
     });
     refreshSpeakerFilter();
     renderResults();
-    spkPop.style.display = 'none';
+    closeModal();
     scheduleAutoSave();
   });
   spkPop.querySelector('#spkReset')?.addEventListener('click', () => {
@@ -80,11 +84,8 @@ export function renderSpkPop() {
 
 export function initSpkPop() {
   $('spkBtn').addEventListener('click', () => {
-    if (spkPop.style.display === 'block') { spkPop.style.display = 'none'; return; }
+    if (isModalOpen(spkPop)) { closeModal(); return; }
     renderSpkPop();
-    const r = $('spkBtn').getBoundingClientRect();
-    spkPop.style.display = 'block';
-    spkPop.style.top = (r.bottom + 6) + 'px';
-    spkPop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 340)) + 'px';
+    openModal(spkPop);
   });
 }

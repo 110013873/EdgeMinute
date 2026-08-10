@@ -14,6 +14,7 @@ import { applySearchHighlight } from './find.js';
 import { scheduleAutoSave } from './autosave.js';
 import { toast } from './ui-feedback.js';
 import { icon } from './icons.js';
+import { attendeeList } from './meta-panel.js';
 
 // ---------- 视图段：把原始 segments 按当前"合并/筛选"选项映射为渲染用的行 ----------
 // 每个视图段带 srcIdx（覆盖的原始段下标数组）。未合并时 srcIdx 长度恒为 1。
@@ -105,8 +106,9 @@ export function buildSegRow(item, view) {
 
   row.addEventListener('click', () => { seekAndPlay(item, view.start); setActiveSeg(row); });
   const textEl = row.querySelector('.text');
-  textEl.addEventListener('click', (e) => e.stopPropagation());
   if (!merged) {
+    // 单段行文本可编辑：点击文本进入编辑（放光标），阻止冒泡以免同时触发行的跳转播放。
+    textEl.addEventListener('click', (e) => e.stopPropagation());
     const seg = item.segments[firstIdx];
     textEl.addEventListener('blur', () => {
       const t = textEl.textContent;
@@ -114,6 +116,7 @@ export function buildSegRow(item, view) {
       if (state.searchMatches.length) applySearchHighlight();
     });
   }
+  // 合并行文本只读：不拦截点击，冒泡到行 → 与点时间列一致，跳转并播放该段音频。
   row.querySelector('.speaker').addEventListener('click', (e) => { e.stopPropagation(); beginSpeakerEdit(row.querySelector('.speaker'), view); });
   // 常用操作外置：标注声纹 / AI 提问
   row.querySelector('.rowbtn.flag').addEventListener('click', (e) => { e.stopPropagation(); openAnnotatePopover(item, item.segments[firstIdx], e.currentTarget); });
@@ -166,8 +169,53 @@ export function beginSpeakerEdit(spkEl, view) {
   input.className = 'speaker-edit';
   input.value = oldLabel;
   input.spellcheck = false;
+  input.autocomplete = 'off';
+
+  // 参会人候选（去重）。原先用原生 <datalist>，但在 Chromium 上箭头极不显眼、
+  // 且与 autocomplete=off 冲突被抑制，用户点“下拉”时看不到列表。改为自绘下拉面板：
+  // 输入框仍可自由手输，下方 .spk-suggest 面板列出全部候选、随输入过滤、点击回填。
+  const names = [...new Set(attendeeList())];
+
+  // 编辑态放开 speaker 单元格的 overflow:hidden（否则会裁掉绝对定位的下拉面板）
+  spkEl.classList.add('editing');
   spkEl.textContent = '';
   spkEl.appendChild(input);
+
+  let suggest = null;      // 下拉面板（无候选则始终为 null）
+  let activeIdx = -1;      // 键盘高亮项下标
+  let userTyped = false;   // 用户是否已改动输入（未动过则展示全部候选，不按旧标签过滤）
+  const renderSuggest = () => {
+    if (!names.length) return;
+    // 打开时输入框预填的是当前发言人标签（如“说话人0”），它不该当成过滤词——
+    // 否则一进来就按它过滤，参会人一个都匹配不上，显示“无匹配参会人”。
+    // 仅在用户真正键入后才按输入过滤。
+    const kw = userTyped ? input.value.trim().toLowerCase() : '';
+    const list = kw ? names.filter(n => n.toLowerCase().includes(kw)) : names;
+    if (!suggest) {
+      suggest = document.createElement('div');
+      suggest.className = 'spk-suggest';
+      spkEl.appendChild(suggest);
+    }
+    activeIdx = -1;
+    suggest.innerHTML = list.map((n, i) =>
+      `<button type="button" class="spk-suggest-item" data-i="${i}">${escapeHtml(n)}</button>`).join('')
+      || '<div class="spk-suggest-empty">无匹配参会人</div>';
+    suggest.hidden = false;
+    // mousedown 优先于 input.blur：用 mousedown 提交，避免 blur 先触发把面板关掉
+    suggest.querySelectorAll('.spk-suggest-item').forEach(btn => {
+      btn.addEventListener('mousedown', (e) => {
+        e.preventDefault();                 // 阻止输入框失焦
+        input.value = list[+btn.dataset.i];
+        commit(true);
+      });
+    });
+  };
+  if (names.length) {
+    input.addEventListener('input', () => { userTyped = true; renderSuggest(); });
+    // 聚焦即展开完整候选，无需先输入（这才是用户点“下拉”期望看到的）
+    renderSuggest();
+  }
+
   input.focus();
   input.select();
 
@@ -182,17 +230,37 @@ export function beginSpeakerEdit(spkEl, view) {
       renderResults();                                  // 重建整个列表：所有同名行同步更新
       scheduleAutoSave();
     } else {
-      // 取消或未变更：仅还原本标签文本，避免整表重绘
+      // 取消或未变更：还原本标签文本并去掉编辑态（下拉面板随 textContent 清空一并移除）
+      spkEl.classList.remove('editing');
       spkEl.textContent = oldLabel;
     }
   };
   input.addEventListener('click', (e) => e.stopPropagation());
   input.addEventListener('keydown', (e) => {
     e.stopPropagation();
-    if (e.key === 'Enter') { e.preventDefault(); commit(true); }
-    else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+    const items = suggest && !suggest.hidden
+      ? [...suggest.querySelectorAll('.spk-suggest-item')] : [];
+    if (e.key === 'ArrowDown' && items.length) {
+      e.preventDefault();
+      activeIdx = (activeIdx + 1) % items.length;
+      highlightSuggest(items, activeIdx);
+    } else if (e.key === 'ArrowUp' && items.length) {
+      e.preventDefault();
+      activeIdx = (activeIdx - 1 + items.length) % items.length;
+      highlightSuggest(items, activeIdx);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (activeIdx >= 0 && items[activeIdx]) input.value = items[activeIdx].textContent;
+      commit(true);
+    } else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
   });
   input.addEventListener('blur', () => commit(true));
+}
+
+// 键盘上下键在下拉候选间移动高亮
+function highlightSuggest(items, idx) {
+  items.forEach((el, i) => el.classList.toggle('active', i === idx));
+  items[idx]?.scrollIntoView({ block: 'nearest' });
 }
 
 // ---------- 段操作 ----------

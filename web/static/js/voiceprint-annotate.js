@@ -25,7 +25,7 @@ function ensurePopover() {
 
 async function loadPeople() {
   try {
-    const res = await fetch('/voiceprints');
+    const res = await fetch('/contacts');
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
     return { enabled: data.enabled !== false, people: data.people || [] };

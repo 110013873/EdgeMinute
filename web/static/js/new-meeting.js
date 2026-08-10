@@ -11,6 +11,9 @@ import { normalizeMeta } from './state.js';
 import { $ } from './dom.js';
 import { escapeAttr, toDatetimeLocal, nowDatetimeLocal } from './util.js';
 import { icon } from './icons.js';
+import { pickContacts } from './contact-picker.js';
+import { mergeAttendees } from './attendee-merge.js';
+import { toast } from './ui-feedback.js';
 
 const dialog = $('newMeetingDialog');
 const editor = $('nmAttendeeEditor');
@@ -168,6 +171,17 @@ export function initNewMeeting() {
   $('nmAddAttendeeBtn').addEventListener('click', () => {
     attendees = [...attendees, { name: '', unit: '', title: '' }];
     renderAttendees();
+  });
+
+  // 从通讯录批量导入参会人（对话框内的临时 attendees 数组）
+  $('nmImportContactsBtn').addEventListener('click', async () => {
+    const chosen = await pickContacts();
+    if (!chosen.length) return;
+    const { merged, added, skipped } = mergeAttendees(attendees, chosen);
+    if (!added) { toast(`未导入：所选 ${skipped} 人均已在参会名单中`, 'warn'); return; }
+    attendees = merged;
+    renderAttendees();
+    toast(`已导入 ${added} 人${skipped ? `，跳过 ${skipped} 人（已存在）` : ''}`, 'ok');
   });
 
   // 导入议程

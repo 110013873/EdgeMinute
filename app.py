@@ -7,6 +7,10 @@
 用法: python3 app.py
 访问: http://<host-ip>:8899
 """
+# 注解惰性求值：本模块在 Python 3.9 上运行，PEP 604 的 `X | None` 等联合注解在
+# 运行期求值会报 TypeError；字符串化所有注解可统一兼容（也避免函数签名踩同样的坑）。
+from __future__ import annotations
+
 import asyncio
 import io
 import json
@@ -34,9 +38,9 @@ from funasr.utils.postprocess_utils import rich_transcription_postprocess
 
 import audio_store
 import db
+import contacts
 import sv_embed
 import transcribe_jobs
-import voiceprints
 from services import (
     build_agenda_extract_messages,
     build_history_payload,
@@ -138,7 +142,7 @@ else:
 
 # 会议历史：建表 + 建音频目录 + 清理孤儿音频（删行成功但删目录失败的兜底）
 db.init_db()
-voiceprints.init_db()
+contacts.init_db()
 audio_store.init_store()
 try:
     _removed = audio_store.sweep_orphan_audio(db.all_meeting_ids())
@@ -183,7 +187,24 @@ except Exception as _e:  # 复位失败不应阻断启动
 # 推理串行锁：模型/显存不支持多路并发推理，用锁把多次 /transcribe 串行化。
 # 关键在于推理本身跑在线程池（run_in_threadpool），不占事件循环——
 # 因此转写进行中，/import-agenda、/chat 等其它请求仍能并行响应。
-_infer_lock = asyncio.Lock()
+#
+# 惰性创建：不在 import 期实例化。Python 3.10+ 的 asyncio.Lock 在构造时即绑定
+# 「当时的事件循环」，而 import 阶段 uvicorn 的正式 loop 尚未启动，会把锁绑到错误
+# 的 loop；等到并发争用真正需要 await 挂起时，就会抛
+# 「got Future attached to a different loop」。改为首次使用时在运行中的 loop 内创建。
+_infer_lock: asyncio.Lock | None = None   # 惰性创建，见 _get_infer_lock
+
+
+def _get_infer_lock() -> asyncio.Lock:
+    """返回推理串行锁，首次调用时在当前（uvicorn）事件循环内惰性创建。
+
+    所有调用点都在请求/后台任务协程内执行，此时已处于 uvicorn 的 loop，
+    因此锁被绑到正确的 loop；单进程单 loop，无需额外同步。
+    """
+    global _infer_lock
+    if _infer_lock is None:
+        _infer_lock = asyncio.Lock()
+    return _infer_lock
 
 # B2 后台转写任务管理器（进程内登记 + SSE 事件广播）
 _jobs = transcribe_jobs.TranscribeManager()
@@ -271,7 +292,7 @@ def _compute_speaker_matches(audio_path: str, sentence_info: list) -> dict:
     """
     if not sv_embed.is_enabled():
         return {}
-    enrolled = voiceprints.get_all_embeddings()
+    enrolled = contacts.get_all_embeddings()
     if not enrolled:
         return {}
     reps = build_representative_segments(
@@ -352,7 +373,9 @@ async def save_hotwords(payload: dict = Body(...)):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
-# ---------- 声纹登记 + 管理 ----------
+# ---------- 通讯录（联系人 + 声纹）登记 + 管理 ----------
+# 「通讯录」对外统一命名；联系人可选带声纹（sample_count>0）。声纹匹配内部机制
+# 仍保留 voiceprint/SV 命名（sv_embed、VOICEPRINT_* 参数），语义准确。
 def _extract_sample_embedding(tmp_path: str) -> list:
     """在工作线程中对登记样本文件提声纹向量（同步，抢推理锁的调用方保证串行）。"""
     return sv_embed.embed_file(tmp_path)
@@ -373,7 +396,7 @@ async def _embed_uploaded_sample(file: UploadFile) -> list:
         tmp.write(data)
         tmp_path = tmp.name
     try:
-        async with _infer_lock:
+        async with _get_infer_lock():
             return await run_in_threadpool(_extract_sample_embedding, tmp_path)
     finally:
         try:
@@ -382,13 +405,19 @@ async def _embed_uploaded_sample(file: UploadFile) -> list:
             pass
 
 
-@app.get("/voiceprints")
-async def voiceprints_list():
-    """列出已登记人物（不含向量）。返回 { ok, enabled, people, threshold }。"""
+@app.get("/contacts")
+async def contacts_list():
+    """列出全部联系人（不含向量）。返回 { ok, enabled, people, threshold }。
+
+    每人补 has_voice=(sample_count>0)：区分「已录声纹」与「仅通讯录」。enabled 反映
+    声纹功能是否可用——为 False 时仍可管理无声纹联系人，只是不能登记/匹配声纹。
+    """
     try:
-        people = await run_in_threadpool(voiceprints.list_people)
+        people = await run_in_threadpool(contacts.list_people)
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"查询失败：{e}"}, status_code=500)
+    for p in people:
+        p["has_voice"] = (p.get("sample_count") or 0) > 0
     return JSONResponse({
         "ok": True,
         "enabled": sv_embed.is_enabled(),
@@ -397,14 +426,33 @@ async def voiceprints_list():
     })
 
 
-@app.post("/voiceprints")
-async def voiceprints_enroll(
+@app.post("/contacts")
+async def contacts_add(payload: dict = Body(...)):
+    """新增**无声纹**联系人（仅姓名/单位/职务，无需音频）。body: { name, unit?, title? }。
+
+    返回 { ok, id }。声纹功能是否启用**不影响**此接口——通讯录本身不依赖 SV 模型。
+    判重（同名+同单位）由前端提示、不在此拦截（用户既定：不强制拦截）。
+    """
+    name = str(payload.get("name", "") or "").strip()
+    if not name:
+        return JSONResponse({"ok": False, "error": "姓名不能为空"}, status_code=400)
+    unit = str(payload.get("unit", "") or "").strip()
+    title = str(payload.get("title", "") or "").strip()
+    try:
+        pid = await run_in_threadpool(contacts.add_contact, name, _now_iso(), unit, title)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"入库失败：{e}"}, status_code=500)
+    return JSONResponse({"ok": True, "id": pid})
+
+
+@app.post("/contacts/voice")
+async def contacts_enroll_voice(
     file: UploadFile = File(...),
     name: str = Form(...),
     unit: str = Form(""),
     title: str = Form(""),
 ):
-    """登记新人物：上传一段干净单人语音 + 姓名(可选单位/职务)，提向量入库后丢弃音频。
+    """登记带声纹的联系人：上传一段干净单人语音 + 姓名(可选单位/职务)，提向量入库后丢弃音频。
 
     返回 { ok, id, sample_count }。声纹功能未启用 → 503。
     """
@@ -422,7 +470,7 @@ async def voiceprints_enroll(
         return JSONResponse({"ok": False, "error": f"声纹提取失败：{e}"}, status_code=500)
     try:
         pid = await run_in_threadpool(
-            voiceprints.enroll_person, name, embedding, _now_iso(),
+            contacts.enroll_person, name, embedding, _now_iso(),
             (unit or "").strip(), (title or "").strip(),
         )
     except Exception as e:
@@ -430,15 +478,15 @@ async def voiceprints_enroll(
     return JSONResponse({"ok": True, "id": pid, "sample_count": 1})
 
 
-@app.post("/voiceprints/{person_id}/samples")
-async def voiceprints_add_sample(person_id: int, file: UploadFile = File(...)):
-    """为既有人物追加一条声纹样本（多录几段更稳）。返回 { ok, sample_id }。"""
+@app.post("/contacts/{contact_id}/samples")
+async def contacts_add_sample(contact_id: int, file: UploadFile = File(...)):
+    """为既有联系人追加一条声纹样本（首次即为其录声纹，或多录几段更稳）。返回 { ok, sample_id }。"""
     if not sv_embed.is_enabled():
         return JSONResponse({"ok": False, "error": "声纹功能未启用"}, status_code=503)
-    # 先做廉价的存在性校验，避免对不存在的人物白跑一次 GPU 提取（且提取会独占 _infer_lock）
-    person = await run_in_threadpool(voiceprints.get_person, person_id)
+    # 先做廉价的存在性校验，避免对不存在的联系人白跑一次 GPU 提取（且提取会独占 _infer_lock）
+    person = await run_in_threadpool(contacts.get_person, contact_id)
     if person is None:
-        return JSONResponse({"ok": False, "error": "人物不存在"}, status_code=404)
+        return JSONResponse({"ok": False, "error": "联系人不存在"}, status_code=404)
     try:
         embedding = await _embed_uploaded_sample(file)
     except ValueError as e:
@@ -448,33 +496,33 @@ async def voiceprints_add_sample(person_id: int, file: UploadFile = File(...)):
         return JSONResponse({"ok": False, "error": f"声纹提取失败：{e}"}, status_code=500)
     try:
         sid = await run_in_threadpool(
-            voiceprints.add_sample, person_id, embedding, _now_iso()
+            contacts.add_sample, contact_id, embedding, _now_iso()
         )
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"入库失败：{e}"}, status_code=500)
     if sid is None:
-        return JSONResponse({"ok": False, "error": "人物不存在"}, status_code=404)
+        return JSONResponse({"ok": False, "error": "联系人不存在"}, status_code=404)
     return JSONResponse({"ok": True, "sample_id": sid})
 
 
-@app.get("/voiceprints/{person_id}/samples")
-async def voiceprints_list_samples(person_id: int):
-    """列出某人物的样本元信息（不含向量）。返回 { ok, samples }。"""
+@app.get("/contacts/{contact_id}/samples")
+async def contacts_list_samples(contact_id: int):
+    """列出某联系人的声纹样本元信息（不含向量）。返回 { ok, samples }。"""
     try:
-        person = await run_in_threadpool(voiceprints.get_person, person_id)
+        person = await run_in_threadpool(contacts.get_person, contact_id)
         if person is None:
-            return JSONResponse({"ok": False, "error": "人物不存在"}, status_code=404)
-        samples = await run_in_threadpool(voiceprints.list_samples, person_id)
+            return JSONResponse({"ok": False, "error": "联系人不存在"}, status_code=404)
+        samples = await run_in_threadpool(contacts.list_samples, contact_id)
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"查询失败：{e}"}, status_code=500)
     return JSONResponse({"ok": True, "samples": samples})
 
 
-@app.delete("/voiceprints/{person_id}/samples/{sample_id}")
-async def voiceprints_delete_sample(person_id: int, sample_id: int):
-    """删除某条样本并重算该人物平均向量。返回 { ok }。"""
+@app.delete("/contacts/{contact_id}/samples/{sample_id}")
+async def contacts_delete_sample(contact_id: int, sample_id: int):
+    """删除某条声纹样本并重算该联系人平均向量。返回 { ok }。"""
     try:
-        ok = await run_in_threadpool(voiceprints.delete_sample, sample_id, _now_iso())
+        ok = await run_in_threadpool(contacts.delete_sample, sample_id, _now_iso())
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"删除失败：{e}"}, status_code=500)
     if not ok:
@@ -482,9 +530,9 @@ async def voiceprints_delete_sample(person_id: int, sample_id: int):
     return JSONResponse({"ok": True})
 
 
-@app.patch("/voiceprints/{person_id}")
-async def voiceprints_rename(person_id: int, payload: dict = Body(...)):
-    """改人物姓名（可选单位/职务）。body: { name, unit?, title? }。返回 { ok }。"""
+@app.patch("/contacts/{contact_id}")
+async def contacts_rename(contact_id: int, payload: dict = Body(...)):
+    """改联系人姓名（可选单位/职务）。body: { name, unit?, title? }。返回 { ok }。"""
     name = str(payload.get("name", "") or "").strip()
     if not name:
         return JSONResponse({"ok": False, "error": "姓名不能为空"}, status_code=400)
@@ -492,26 +540,26 @@ async def voiceprints_rename(person_id: int, payload: dict = Body(...)):
     title = payload.get("title")
     try:
         ok = await run_in_threadpool(
-            voiceprints.rename, person_id, name, _now_iso(),
+            contacts.rename, contact_id, name, _now_iso(),
             None if unit is None else str(unit).strip(),
             None if title is None else str(title).strip(),
         )
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"重命名失败：{e}"}, status_code=500)
     if not ok:
-        return JSONResponse({"ok": False, "error": "人物不存在"}, status_code=404)
+        return JSONResponse({"ok": False, "error": "联系人不存在"}, status_code=404)
     return JSONResponse({"ok": True})
 
 
-@app.delete("/voiceprints/{person_id}")
-async def voiceprints_delete(person_id: int):
-    """删除人物及其全部样本。返回 { ok }。"""
+@app.delete("/contacts/{contact_id}")
+async def contacts_delete(contact_id: int):
+    """删除联系人及其全部声纹样本。返回 { ok }。"""
     try:
-        ok = await run_in_threadpool(voiceprints.delete_person, person_id)
+        ok = await run_in_threadpool(contacts.delete_person, contact_id)
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"删除失败：{e}"}, status_code=500)
     if not ok:
-        return JSONResponse({"ok": False, "error": "人物不存在"}, status_code=404)
+        return JSONResponse({"ok": False, "error": "联系人不存在"}, status_code=404)
     return JSONResponse({"ok": True})
 
 
@@ -559,7 +607,7 @@ async def annotate_voiceprint(meeting_id: int, file_index: int, payload: dict = 
         return sv_embed.embed_array(clip, sv_embed.TARGET_SR)
 
     try:
-        async with _infer_lock:
+        async with _get_infer_lock():
             embedding = await run_in_threadpool(_extract)
     except ValueError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
@@ -568,9 +616,9 @@ async def annotate_voiceprint(meeting_id: int, file_index: int, payload: dict = 
 
     # 查找或创建人物 + 追加样本
     now = _now_iso()
-    existing = await run_in_threadpool(voiceprints.find_person_by_name, person_name)
+    existing = await run_in_threadpool(contacts.find_person_by_name, person_name)
     if existing:
-        sid = await run_in_threadpool(voiceprints.add_sample, existing["id"], embedding, now)
+        sid = await run_in_threadpool(contacts.add_sample, existing["id"], embedding, now)
         if sid is None:
             return JSONResponse({"ok": False, "error": "人物不存在"}, status_code=404)
         return JSONResponse({
@@ -581,7 +629,7 @@ async def annotate_voiceprint(meeting_id: int, file_index: int, payload: dict = 
             "is_new": False,
         })
     else:
-        pid = await run_in_threadpool(voiceprints.enroll_person, person_name, embedding, now)
+        pid = await run_in_threadpool(contacts.enroll_person, person_name, embedding, now)
         return JSONResponse({
             "ok": True,
             "person_id": pid,
@@ -603,7 +651,7 @@ async def transcribe(file: UploadFile = File(...), hotword: str = ""):
         # 推理放到线程池执行，避免阻塞事件循环（否则长音频转写期间
         # /import-agenda、/chat 等请求全部被卡住，直到转写结束才一起返回）；
         # 用 _infer_lock 保证多次转写串行，防止并发推理挤爆显存。
-        async with _infer_lock:
+        async with _get_infer_lock():
             result = await run_in_threadpool(_run_asr, tmp_path, hotword)
             sentence_info = result[0].get("sentence_info", [])
             # 声纹自动匹配：紧接 ASR、仍持推理锁时执行（同样吃 GPU，需串行）。
@@ -1122,7 +1170,7 @@ async def _run_asr_from_disk(meeting_id: int, file_index: int, hotword: str) -> 
         raise RuntimeError("音频不存在，无法转写")
 
     start_time = time.time()
-    async with _infer_lock:
+    async with _get_infer_lock():
         result = await run_in_threadpool(_run_asr, path, hotword)
         sentence_info = result[0].get("sentence_info", [])
         speaker_matches = await run_in_threadpool(
