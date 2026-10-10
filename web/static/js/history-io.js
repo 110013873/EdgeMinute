@@ -10,6 +10,9 @@ const SCHEMA_VERSION = 2;
 
 // state.files[] → 历史 payload.files[]（纯数据，剔除 File/URL 等运行期字段）。
 // 保留 status：草稿/转写中/失败文件也要如实回写，PUT 不得把它们抹成完成态。
+// 保留 deleted：删除采用「原地留墓碑」而非数组重排（file_index 同时是下标/路由参数/
+// 音频文件名前缀，见 CLAUDE.md），墓碑必须能被回写，否则服务端归一化边界会把这个
+// 空槽当成一张普通 pending 卡片，删掉的录音在下一次自动保存时复活。
 export function fileToPayload(f) {
   return {
     id: f.id,
@@ -20,10 +23,17 @@ export function fileToPayload(f) {
     error: f.error || '',
     audio_name: f.audio_name || '',
     has_audio: !!f.has_audio,
-    segments: (f.segments || []).map(s => ({
-      start: s.start, end: s.end, speaker: s.speaker,
-      text: s.text, flagged: !!s.flagged,
-    })),
+    deleted: !!f.deleted,
+    segments: (f.segments || []).map(s => {
+      const seg = {
+        start: s.start, end: s.end, speaker: s.speaker,
+        text: s.text, flagged: !!s.flagged,
+      };
+      // 行级发言人覆盖：服务端白名单只认这个键，不带上就会在下次自动保存后丢失
+      const ov = (s.speakerName || '').trim();
+      if (ov) seg.speakerName = ov;
+      return seg;
+    }),
   };
 }
 

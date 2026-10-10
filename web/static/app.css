@@ -244,12 +244,87 @@
   }
   .btn-transcribe:hover:not(:disabled) { background: var(--accent-hover); }
   .btn-transcribe:disabled { opacity: 0.4; cursor: not-allowed; }
+  /* 删除单段录音：与转写按钮同排的图标按钮。默认低调（延续 .hp-del 的 hover 显形约定），
+     悬停转红。不用 opacity:0 完全隐形——录音卡片会随会议变多，删除入口需要可发现。 */
+  .btn-del-file {
+    flex: none; display: inline-flex; align-items: center; justify-content: center;
+    padding: 6px 8px; border: none; border-radius: 7px;
+    background: transparent; color: var(--muted); cursor: pointer;
+    opacity: 0.55; transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+  }
+  .btn-del-file:hover:not(:disabled) { background: #3a1c1c; color: var(--err); opacity: 1; }
+  .btn-del-file:disabled { opacity: 0.25; cursor: not-allowed; }
+  .btn-del-file svg { display: block; }
   .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
   .badge.pending { background: #2a2e3a; color: var(--muted); }
   .badge.processing { background: var(--accent-dim); color: var(--accent); }
   .badge.done { background: #163a2c; color: var(--ok); }
   .badge.error { background: #3a1c1c; color: var(--err); }
   .badge.processing .spinner { --spin-size: 10px; --spin-gap: 5px; }
+  /* 录制中徽章：红底 + 脉冲红点，与「转写中」的蓝底 spinner 明确区分 */
+  .badge.recording { background: #3a1c1c; color: var(--err); }
+  .badge.recording .rec-dot { margin-right: 5px; }
+
+  /* ---------- 麦克风录音条（会议录音 Tab 内，dropzone 下方） ---------- */
+  /* 单行紧凑条：设备下拉 + 开始/停止。电平条与说明文字已按用户要求移除。 */
+  .rec-bar {
+    margin: 12px 16px 0;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--panel-alt);
+  }
+  .rec-bar.active { border-color: var(--err); }
+  /* [hidden] 必须显式 none 覆盖 display:none —— 同 .rec-tag[hidden] 的理由：UA 样式表
+     的 [hidden] 优先级低于任何作者声明。这里更要紧：.rec-bar 默认 hidden，少了这行
+     整条录音条会在功能不可用时照样显示出来。 */
+  .rec-bar[hidden] { display: none; }
+  .rec-row { display: flex; align-items: center; gap: 8px; }
+  .rec-device {
+    flex: 1; min-width: 0; padding: 7px 9px; border-radius: 7px;
+    background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    font-size: 13px; outline: none;
+  }
+  .rec-device:focus { border-color: var(--accent); }
+  .rec-device:disabled { opacity: 0.6; cursor: not-allowed; }
+  .rec-btn {
+    flex: none; padding: 7px 14px; border: none; border-radius: 7px;
+    background: var(--accent); color: #fff; font-size: 13.5px; font-weight: 600;
+    cursor: pointer; white-space: nowrap;
+  }
+  .rec-btn:hover:not(:disabled) { background: var(--accent-hover); }
+  .rec-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .rec-btn.recording { background: var(--err); }
+  /* 计时行：只在录制中出现（recorder.js 改 hidden）。同样是 display:flex 与 [hidden]
+     的优先级之争，必须显式覆盖，否则空闲时那行 00:00:00 会一直挂着。 */
+  .rec-meta {
+    display: flex; align-items: center; gap: 10px; margin-top: 8px;
+    padding-left: 16px; font-size: 12.5px; color: var(--muted);
+  }
+  .rec-meta[hidden] { display: none; }
+  .rec-time { font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+
+  /* 录音中脉冲红点（两端共用：录音条 + 工具栏全局指示 + 文件徽章） */
+  .rec-dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--muted); flex: none;
+  }
+  .rec-dot.on { background: var(--err); animation: rec-pulse 1.4s ease-in-out infinite; }
+  @keyframes rec-pulse {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(224,86,86,0.55); }
+    50% { opacity: 0.55; box-shadow: 0 0 0 4px rgba(224,86,86,0); }
+  }
+  /* 工具栏全局指示：切到转写页也看得见「正在录音」 */
+  .rec-tag {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 9px; border-radius: 999px;
+    background: #3a1c1c; color: var(--err); font-size: 12.5px; white-space: nowrap;
+  }
+  /* [hidden] 必须显式 none 覆盖 display:inline-flex —— UA 样式表的 [hidden] 优先级
+     低于任何作者声明，少了这行，recorder.js 里 el.hidden = true 根本没效果，
+     停止录音后「录制中」徽章会一直挂在发言人筛选框旁边（同 .seg .rowmenu[hidden]）。 */
+  .rec-tag[hidden] { display: none; }
+  .rec-tag .rec-tag-time { font-variant-numeric: tabular-nums; }
 
   .btn-all {
     width: 100%; padding: 10px; border: none; border-radius: 8px;
@@ -646,6 +721,20 @@
   .spk-auto {
     flex: none; display: inline-flex; align-items: center; cursor: help;
     color: var(--ok);
+  }
+
+  /* ---------- 行级覆盖提示（映射面板内） ---------- */
+  /* 该簇有若干段在转写列表里被单独改过名字，不受本面板映射影响。不标出来的话，
+     面板显示「说话人0 → 张三」而列表里有几行写着李四，看着像 bug。
+     紧跟所属 .spk-row 之下，故把该行的下间距收掉，让提示贴着它。 */
+  .spk-row:has(+ .spk-row-note) { margin-bottom: 3px; }
+  .spk-row-note { margin: -3px 0 10px 26px; }
+  .spk-rows {
+    display: inline-flex; align-items: center; cursor: help;
+    font-size: 11px; line-height: 1.5; color: var(--warn);
+    background: rgba(242,193,78,0.12);
+    border: 1px solid rgba(242,193,78,0.30);
+    border-radius: 5px; padding: 1px 6px; white-space: nowrap;
   }
 
   /* ---------- 通讯录管理弹层 ---------- */

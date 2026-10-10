@@ -5,13 +5,14 @@
 全流程本地内网运行，音频与转写数据不出域。
 
 用法: python3 app.py
-访问: http://<host-ip>:8899
+访问: http://<host-ip>:80
 """
 # 注解惰性求值：本模块在 Python 3.9 上运行，PEP 604 的 `X | None` 等联合注解在
 # 运行期求值会报 TypeError；字符串化所有注解可统一兼容（也避免函数签名踩同样的坑）。
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import io
 import json
 import os
@@ -39,12 +40,15 @@ from funasr.utils.postprocess_utils import rich_transcription_postprocess
 import audio_store
 import db
 import contacts
+import recorder
 import sv_embed
 import transcribe_jobs
 from services import (
+    FILE_DELETED,
     build_agenda_extract_messages,
     build_history_payload,
     build_llm_messages,
+    build_recording_name,
     build_representative_segments,
     build_summary_messages,
     build_template_context,
@@ -54,10 +58,20 @@ from services import (
     extract_docx_text,
     extract_history_columns,
     group_by_date,
+    is_deleted_file,
+    list_capture_devices,
+    pick_capture_device,
     match_speakers,
     parse_agenda_json,
     parse_summary_json,
+    preserve_deleted_files,
+    preserve_recording_file,
+    raw_pcm_seconds,
+    recording_raw_name,
+    recording_wav_name,
+    tombstone_file,
     validate_history_payload,
+    wrap_raw_to_wav,
 )
 
 # ---------- 配置 ----------
@@ -103,7 +117,33 @@ VOICEPRINT_MIN_SEG_SECONDS = env_float("VOICEPRINT_MIN_SEG_SECONDS", 0.5)
 # 登记音频上传大小上限（字节）；提完向量即丢弃，不落盘
 VOICEPRINT_SAMPLE_MAX_BYTES = env_int("VOICEPRINT_SAMPLE_MAX_BYTES", 20 * 1024 * 1024)
 
-app = FastAPI(title="密纪 EdgeMinute — 本地会议纪要服务")
+# ---------- 麦克风录音配置 ----------
+# RECORD_ENABLED=0 可整体关闭录音（隐藏 UI、接口报 503），与 SV_ENABLED 同构。
+# 注意：探测器 = 服务端能否枚举到采集设备 + ffmpeg 是否可用，二者任一不满足即视为关闭。
+RECORD_ENABLED = os.environ.get("RECORD_ENABLED", "1") not in ("0", "false", "False", "")
+# 指定默认录音设备（plughw 串，如 plughw:CARD=Device,DEV=0）；留空则取枚举到的第一个。
+RECORD_DEVICE = os.environ.get("RECORD_DEVICE", "").strip()
+# 录音大小上限（字节，由 audio_store.RECORD_MAX_BYTES 提供默认，见该模块说明）
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """服务生命周期：关闭时收尾在途录音。
+
+    录音由 ffmpeg 子进程承担，进程随服务一起被 systemd 收掉。若不在这里主动停一次，
+    ffmpeg 拿不到 SIGINT，最后一段写缓冲丢失、裸流也不会补 WAV 头；而补头本身还能让
+    「服务重启」这一路径与「服务被 SIGKILL」区分开——前者能干净收尾，后者靠启动扫描
+    兜底（见 _recover_interrupted_recordings）。shutdown 不提交转写（服务正在停，提了
+    也跑不完，只会留下一堆 queued 被下次启动判成 error）。
+    """
+    yield
+    try:
+        await _recorder.shutdown()
+    except Exception as _e:  # 关闭路径绝不因录音收尾失败而中断
+        print(f"录音收尾跳过：{_e}")
+
+
+app = FastAPI(title="密纪 EdgeMinute — 本地会议纪要服务", lifespan=_lifespan)
+
 
 # 前端静态资源（ESM 模块 + CSS）。index.html 以模块方式引用 /static/js/main.js。
 app.mount(
@@ -155,7 +195,12 @@ except Exception as _e:  # 清理失败不应阻断启动
 def _reset_stale_transcribing() -> int:
     """启动时复位残留的转写任务：进程重启后内存任务已丢失，DB 里却可能停在
     transcribing。把这些会议中 queued/processing 的文件标为 error（可重新转写），
-    并按文件态重算会议级 status。返回受影响的会议数。"""
+    并按文件态重算会议级 status。返回受影响的会议数。
+
+    注意 `recording` 不在此列：它是采集态而非推理态，由
+    _recover_interrupted_recordings 先补 WAV 头再落到 pending（见 lifespan 的调用
+    顺序）。若这里把 recording 一起标 error，崩溃恢复就会白丢一个可救的录音。
+    """
     affected = 0
     for mid in db.ids_by_status("transcribing"):
         item = db.get_meeting(mid)
@@ -177,12 +222,267 @@ def _reset_stale_transcribing() -> int:
     return affected
 
 
+def _recover_interrupted_recordings() -> list[tuple[int, int]]:
+    """启动扫描：把崩溃/强杀遗留的录音裸流补成 WAV，并复位文件态。
+
+    这是「录裸流」这一选择的兑现点（见 services.wrap_raw_to_wav 的说明）：裸流任意
+    长度的前缀都是合法音频，故 SIGKILL / 断电后仍能按实际大小补出可转写的 WAV，损失
+    以 ffmpeg 未刷盘的写缓冲为界。三件事按文件逐一处理，互不影响：
+
+    - 有裸流 → 补 WAV，置 pending，返回给调用方以便提交转写；
+    - 无裸流（ffmpeg 一秒都没写成）→ 置 error，给用户看得懂的提示；
+    - 会议已不存在（删了一半）→ 跳过，交给孤儿音频清理。
+    返回 [(meeting_id, file_index)]，仅含成功补头、可转写的文件。
+    """
+    recovered: list[tuple[int, int]] = []
+    root = audio_store.AUDIO_DIR
+    if not os.path.isdir(root):
+        return recovered
+    for dirname in sorted(os.listdir(root)):
+        if not dirname.isdigit():
+            continue
+        meeting_id = int(dirname)
+        item = db.get_meeting(meeting_id)
+        if item is None:
+            continue
+        payload = item.get("payload") or {}
+        files = payload.get("files") or []
+        changed = False
+        for idx, f in enumerate(files):
+            if f.get("status") != "recording":
+                continue
+            raw_name = recording_raw_name(idx)
+            wav_name = recording_wav_name(idx)
+            raw_path = os.path.join(root, dirname, raw_name)
+            wav_path = os.path.join(root, dirname, wav_name)
+            if os.path.isfile(raw_path):
+                try:
+                    data_bytes = wrap_raw_to_wav(raw_path, wav_path)
+                except OSError as e:
+                    f["status"] = "error"
+                    f["error"] = f"录音收尾失败：{e}"
+                    changed = True
+                    continue
+                f["status"] = "pending"
+                f["audio_name"] = wav_name
+                f["has_audio"] = True
+                f["duration"] = round(raw_pcm_seconds(data_bytes), 1)
+                f.pop("error", None)
+                recovered.append((meeting_id, idx))
+            else:
+                f["status"] = "error"
+                f["error"] = "录音中断，未产生音频"
+            changed = True
+        if changed:
+            payload["status"] = derive_meeting_status(files)
+            db.update_payload(meeting_id, payload, extract_history_columns(payload), _now_iso())
+    return recovered
+
+
 try:
     _reset = _reset_stale_transcribing()
     if _reset:
         print(f"已复位 {_reset} 个中断的转写会议（标为可重新转写）")
 except Exception as _e:  # 复位失败不应阻断启动
     print(f"转写复位跳过：{_e}")
+
+# 崩溃恢复须在 _reset_stale_transcribing 之后：后者会把 transcribing 会议里的
+# queued/processing 标为 error，而录音残留是 recording 态（不在其列），由这里补头
+# 后落到 pending。两者顺序调换也不会互相破坏，但先复位再补头能少写一次 DB。
+try:
+    _recovered = _recover_interrupted_recordings()
+    if _recovered:
+        print(f"已恢复 {len(_recovered)} 路中断的录音（补 WAV 头，可重新转写）")
+except Exception as _e:  # 恢复失败不应阻断启动
+    print(f"录音恢复跳过：{_e}")
+
+
+# ---------- 麦克风录音：服务端采集 + 收尾落库 ----------
+async def _persist_record_result(
+    meeting_id: int, file_index: int, *, status: str, duration: float,
+    error: str, raw_path: str, wav_path: str, hotword: str = "",
+) -> None:
+    """录音收尾后的落库回调（recorder.on_finalize）。
+
+    把 WAV 引用与时长写回该文件条目，重算会议级状态，并按 status 决定是否提交转写：
+    `pending`（正常停止 / 触顶自动停）→ 提交转写，与上传完成后自动转写的行为一致；
+    `error`（进程异常退出但已救回音频）→ 不提交，把决定权留给用户，避免把一个已知
+    残缺的录音直接送去转写。音频始终保留，用户可手动点「开始转写」。
+    """
+    item = await run_in_threadpool(db.get_meeting, meeting_id)
+    if item is None:
+        return  # 会议已被删除：丢弃结果（音频目录随后由删除流程清掉）
+    payload = item.get("payload") or {}
+    files = payload.get("files") or []
+    if file_index < 0 or file_index >= len(files):
+        return
+    f = files[file_index]
+    # 槽位已被删除（墓碑）：这次收尾无处可写。删除路由只挡住「正在录」的槽位，而
+    # stop() 一进来就把登记项摘掉了，因此「停止录音 → 收尾完成」这几秒里用户仍可能
+    # 删掉这张卡；若不拦，收尾回调会把一个刚删掉的条目连音频引用一起写回去。
+    # 音频随删除一起清掉，避免留下无引用的孤儿文件。
+    if is_deleted_file(f):
+        await run_in_threadpool(audio_store.delete_file_audio,
+                                meeting_id, os.path.basename(wav_path))
+        return
+    f["status"] = "pending" if status == "pending" else "error"
+    f["audio_name"] = os.path.basename(wav_path)
+    f["has_audio"] = True
+    if duration:
+        f["duration"] = round(duration, 1)
+    if error:
+        f["error"] = error
+    else:
+        f.pop("error", None)
+    payload["status"] = derive_meeting_status(files)
+    await run_in_threadpool(db.update_payload, meeting_id, payload,
+                            extract_history_columns(payload), _now_iso())
+    _jobs.broadcast(meeting_id, {"type": "meeting", "status": payload["status"]})
+    if f["status"] == "pending":
+        _submit_record_transcribe(meeting_id, file_index, hotword)
+
+
+def _submit_record_transcribe(meeting_id: int, file_index: int, hotword: str = "") -> None:
+    """提交已收尾录音的整文件转写。
+
+    刻意复用与上传路径完全相同的运行器与持久化回调（_run_asr_from_disk /
+    _persist_transcribe_result）：这正是「录音停止后就是一个普通文件」这条不变式在
+    代码上的落点——转写侧不知道、也不需要知道音频来自麦克风还是上传。
+    """
+    async def runner():
+        return await _run_asr_from_disk(meeting_id, file_index, hotword)
+    _jobs.submit(meeting_id, file_index, runner, _persist_transcribe_result)
+
+
+# B2 后台转写任务管理器（进程内登记 + SSE 事件广播）。
+# 必须早于下面的 _recorder 构造：RecorderManager 把 _jobs.broadcast 作为 emit 注入，
+# 这是 import 期求值（不是调用期），定义顺序反了会在启动时直接 NameError。
+_jobs = transcribe_jobs.TranscribeManager()
+
+
+# 录音管理器：事件走 _jobs 的同一条 SSE 总线（broadcast 是公开注入点），
+# 收尾落库走上面的回调。大小上限由 audio_store 提供（ffmpeg 直写，服务端不经手字节）。
+_recorder = recorder.RecorderManager(
+    emit=_jobs.broadcast,
+    on_finalize=_persist_record_result,
+    max_bytes=audio_store.RECORD_MAX_BYTES,
+)
+
+
+@app.get("/record/devices")
+async def record_devices():
+    """列出可用的采集设备，供前端渲染设备下拉与「录音」入口的可见性。
+
+    enabled 由 RECORD_ENABLED 与「确实挑得出一个设备」共同决定——在开发机（无
+    /proc/asound）上自然为 false，前端据此整块隐藏录音 UI，而不是显示一个点了必然
+    失败的按钮。default_device 是建议默认项（RECORD_DEVICE 优先，其次 USB 卡）。
+
+    注意启用判据用的是 picked 而不是 devices：显式配置了 RECORD_DEVICE 而枚举恰好
+    失败时，pick_capture_device 会直接采信该串（用户能用 arecord 录就说明设备存在），
+    此处必须与 /record/start 的判据一致，否则会出现「接口肯录音、UI 却不给入口」。
+    """
+    devices = list_capture_devices(RECORD_DEVICE)
+    picked = pick_capture_device(devices, RECORD_DEVICE)
+    return JSONResponse({
+        "ok": True,
+        "enabled": bool(RECORD_ENABLED and picked),
+        "devices": devices,
+        "default_device": (picked or {}).get("plughw", ""),
+    })
+
+
+@app.post("/history/{meeting_id}/record/start")
+async def record_start(meeting_id: int, payload: dict = Body(default={})):
+    """开始一路麦克风录音：分配文件槽、落盘、启动 ffmpeg 采集。返回 { ok, file_index }。
+
+    文件条目在**开始时就写入 payload**（status=recording、audio_name 指向收尾后的
+    .wav 名）：这样浏览器关掉再打开、甚至服务重启扫描，都能从服务端得知「这场会议正在
+    录音」，而不是靠前端内存记着。音频文件此刻尚不存在——这是录音唯一的例外，由
+    audio_store.recording_target 专门授权。
+    """
+    if not RECORD_ENABLED:
+        return JSONResponse({"ok": False, "error": "录音功能已关闭"}, status_code=503)
+    devices = list_capture_devices(RECORD_DEVICE)
+    if not devices:
+        return JSONResponse({"ok": False, "error": "未检测到可用的录音设备"}, status_code=503)
+
+    device = str((payload or {}).get("device", "") or "").strip() or RECORD_DEVICE
+    picked = pick_capture_device(devices, device)
+    if picked is None:
+        return JSONResponse({"ok": False, "error": "录音设备不可用"}, status_code=400)
+    device = picked["plughw"]
+    hotword = str((payload or {}).get("hotword", "") or "").strip()
+
+    item = await run_in_threadpool(db.get_meeting, meeting_id)
+    if item is None:
+        return JSONResponse({"ok": False, "error": "记录不存在"}, status_code=404)
+    if _recorder.is_recording(meeting_id):
+        return JSONResponse({"ok": False, "error": "该会议正在录音中"}, status_code=409)
+
+    payload_obj = item.get("payload") or {}
+    files = list(payload_obj.get("files") or [])
+    file_index = len(files)
+    try:
+        raw_path, wav_path = await run_in_threadpool(
+            audio_store.recording_target, meeting_id, recording_raw_name(file_index)
+        )
+    except (ValueError, OSError) as e:
+        return JSONResponse({"ok": False, "error": f"录音目录不可用：{e}"}, status_code=500)
+
+    files.append({
+        "id": f"rec{file_index}",
+        "name": build_recording_name(_now_iso()),
+        "duration": None,
+        "elapsed": None,
+        "audio_name": recording_wav_name(file_index),
+        "has_audio": True,
+        "status": "recording",
+        "segments": [],
+    })
+    payload_obj["files"] = files
+    payload_obj["status"] = derive_meeting_status(files)
+    await run_in_threadpool(db.update_payload, meeting_id, payload_obj,
+                            extract_history_columns(payload_obj), _now_iso())
+
+    try:
+        started = _recorder.start(meeting_id, file_index, device, raw_path, wav_path, hotword)
+    except Exception as e:  # ffmpeg 缺失 / 设备打不开：回滚刚建的文件条目，不留半成品
+        payload_obj["files"] = payload_obj["files"][:file_index]
+        payload_obj["status"] = derive_meeting_status(payload_obj["files"])
+        await run_in_threadpool(db.update_payload, meeting_id, payload_obj,
+                                extract_history_columns(payload_obj), _now_iso())
+        return JSONResponse({"ok": False, "error": f"无法启动录音：{e}"}, status_code=500)
+    if not started:
+        return JSONResponse({"ok": False, "error": "该会议正在录音中"}, status_code=409)
+
+    _jobs.broadcast(meeting_id, {"type": "meeting", "status": payload_obj["status"]})
+    return JSONResponse({"ok": True, "file_index": file_index,
+                         "device": device, "started_at": _recorder.active_started_at(meeting_id).get(file_index)})
+
+
+@app.post("/history/{meeting_id}/record/stop")
+async def record_stop(meeting_id: int):
+    """停止录音：收尾补 WAV 头 → 落库 → 自动提交整文件转写。幂等（未在录返回 404）。"""
+    if not await _recorder.stop(meeting_id):
+        return JSONResponse({"ok": False, "error": "该会议当前没有录音"}, status_code=404)
+    return JSONResponse({"ok": True})
+
+
+@app.get("/history/{meeting_id}/record")
+async def record_status(meeting_id: int):
+    """查询某会议的录音运行态。给**没有 SSE 连接**的场景兜底（浏览器重开/换设备）：
+    前端启动时拉一次即可决定按钮态与计时起点，计时不归零。"""
+    started = _recorder.active_started_at(meeting_id)
+    file_index = _recorder.active_file_index(meeting_id)
+    return JSONResponse({
+        "ok": True,
+        "recording": file_index is not None,
+        "file_index": file_index,
+        "started_at": started.get(file_index) if file_index is not None else None,
+        "recorded_seconds": round(_recorder.recorded_seconds(meeting_id), 1),
+        "level": round(_recorder.level(meeting_id), 4),
+    })
+
 
 # 推理串行锁：模型/显存不支持多路并发推理，用锁把多次 /transcribe 串行化。
 # 关键在于推理本身跑在线程池（run_in_threadpool），不占事件循环——
@@ -205,9 +505,6 @@ def _get_infer_lock() -> asyncio.Lock:
     if _infer_lock is None:
         _infer_lock = asyncio.Lock()
     return _infer_lock
-
-# B2 后台转写任务管理器（进程内登记 + SSE 事件广播）
-_jobs = transcribe_jobs.TranscribeManager()
 
 
 # ASR 前音频预处理滤波链（识别前统一跑）：
@@ -283,7 +580,7 @@ def _run_asr(tmp_path: str, hotword: str):
 def _compute_speaker_matches(audio_path: str, sentence_info: list) -> dict:
     """同步计算说话人→登记人物的自动匹配（在工作线程中调用）。
 
-    流程：按 spk 分组取最长段(纯函数) → soundfile 读整段并重采样 16k → 逐 spk
+    流程：按 spk 分组取最长段(纯函数) → 读整段音频并重采样 16k → 逐 spk
     切片拼接过 SV 模型提向量 → 与声纹库余弦匹配。返回 {spk(str): {name, score}}，
     仅含命中项；未命中/无库/功能关闭/任何异常 → 返回已得到的部分或 {}。
 
@@ -341,6 +638,14 @@ async def index():
 @app.get("/logo.svg")
 async def logo():
     return FileResponse(os.path.join(WEB_DIR, "logo.svg"))
+
+
+@app.get("/favicon.svg")
+async def favicon():
+    """站点图标（浏览器标签页）。与 /logo.svg 同样的静态返回方式。
+    浏览器还会自动请求 /favicon.ico；此处不提供，让它 404 即可——index.html 里的
+    <link rel="icon"> 已明确指向本路由，浏览器不会再退回那个默认路径。"""
+    return FileResponse(os.path.join(WEB_DIR, "favicon.svg"), media_type="image/svg+xml")
 
 
 HOTWORDS_PATH = os.path.join(os.path.dirname(__file__), "hotwords.txt")
@@ -1064,13 +1369,90 @@ async def history_append_audio(meeting_id: int, file_index: int, request: Reques
     return JSONResponse({"ok": True, "audio_name": audio_name})
 
 
+@app.delete("/history/{meeting_id}/files/{file_index}")
+async def history_delete_file(meeting_id: int, file_index: int):
+    """删除某会议中的单个文件卡片（录音段/上传音频）。返回 { ok }。
+
+    **不重排数组**：file_index 同时是数组下标、路由参数、SSE 帧键、音频文件名前缀
+    与在途任务身份（见 CLAUDE.md），重排会让后续每个下标与磁盘上 `{index}_` 开头的
+    文件名全部错位，并让在途转写结果写回错误的槽位。删除改为**原地留墓碑**：槽位
+    保留、内容清空（services.tombstone_file），索引空间保持稳定。
+
+    因此有两种情况必须拒绝，否则会造成真实的数据错乱：
+
+    - **该槽位正在录音**（`_recorder.active_file_index`）：ffmpeg 正往它的 `.raw`
+      里写，此刻把槽位抹成墓碑会让停止时的收尾回调把一个已删条目写回去，且音频
+      文件已随删除消失。
+    - **该槽位有在途转写任务**（queued/processing）：任务完成时的
+      `_persist_transcribe_result` 按下标写回，会把结果写进墓碑。两种情形都返回
+      409，让用户等它跑完再删。
+    """
+    item = await run_in_threadpool(db.get_meeting, meeting_id)
+    if item is None:
+        return JSONResponse({"ok": False, "error": "记录不存在"}, status_code=404)
+    payload = item.get("payload") or {}
+    files = payload.get("files") or []
+    if file_index < 0 or file_index >= len(files):
+        return JSONResponse({"ok": False, "error": "文件索引越界"}, status_code=404)
+
+    entry = files[file_index]
+    if is_deleted_file(entry):
+        return JSONResponse({"ok": True})  # 幂等：已删过，直接当成功
+    if _recorder.active_file_index(meeting_id) == file_index:
+        return JSONResponse({"ok": False, "error": "该段正在录音，请先停止录音"}, status_code=409)
+    if file_index in _jobs.active_file_indices(meeting_id):
+        return JSONResponse({"ok": False, "error": "该段正在转写中，请等待完成"}, status_code=409)
+
+    # 音频名要在清空之前取：墓碑会把 audio_name 抹掉，之后就没法定位磁盘上的文件了。
+    audio_name = str(entry.get("audio_name", "") or "")
+
+    files[file_index] = tombstone_file(entry)
+    payload["files"] = files
+    payload["status"] = derive_meeting_status(files)
+    try:
+        await run_in_threadpool(db.update_payload, meeting_id, payload,
+                                extract_history_columns(payload), _now_iso())
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"更新失败：{e}"}, status_code=500)
+
+    # 落库成功后再删磁盘音频：反过来的话，删文件成功而落库失败会留下「条目还在、
+    # 音频没了」的破损记录。此处失败只留孤儿文件（该目录随会议删除一起清理），
+    # 不影响用户看到的结果。
+    if audio_name:
+        await run_in_threadpool(audio_store.delete_file_audio, meeting_id, audio_name)
+
+    # 广播：文件级墓碑帧让其它标签页把卡片抹掉，会议级帧刷新左栏角标
+    _jobs.broadcast(meeting_id, {"type": "file", "file_index": file_index,
+                                 "status": FILE_DELETED})
+    _jobs.broadcast(meeting_id, {"type": "meeting", "status": payload["status"]})
+    return JSONResponse({"ok": True, "status": payload["status"]})
+
+
 async def _apply_history_update(meeting_id: int, raw_payload) -> JSONResponse:
-    """PUT 与 beacon-POST 共用的更新逻辑：校验 payload → 更新行。"""
+    """PUT 与 beacon-POST 共用的更新逻辑：校验 payload → 更新行。
+
+    录音护栏：前端 autosave 整份 PUT 它内存里的 files 数组，若那份内存态早于录音
+    开始，这次 PUT 会把服务端刚建好的录音条目整个抹掉——这是服务端唯一会被前端整体
+    覆盖的写入口，也是录音期间唯一真实的写竞争（录音期间服务端不写段落）。护栏刻意
+    做窄：仅在「该会议确实在录」且「PUT 的 files 恰好指向同一索引」时，用服务端已知
+    的条目盖回该槽位，其余字段一律照旧（见 services.preserve_recording_file）。
+    """
     try:
         norm = validate_history_payload(raw_payload, max_bytes=HISTORY_PAYLOAD_MAX_BYTES)
     except ValueError as e:
         code = 413 if "过大" in str(e) else 400
         return JSONResponse({"ok": False, "error": str(e)}, status_code=code)
+
+    # 录音中的条目：以服务端登记表为准，不信任前端可能过期的内存态
+    rec_index = _recorder.active_file_index(meeting_id)
+    item = await run_in_threadpool(db.get_meeting, meeting_id)
+    cur_files = ((item or {}).get("payload") or {}).get("files") or []
+    if rec_index is not None and 0 <= rec_index < len(cur_files):
+        norm = preserve_recording_file(norm, rec_index, cur_files[rec_index])
+    # 已删除的槽位：墓碑不可逆，整份 PUT 不能把它写回来。与上面同源的竞争——
+    # 删除请求与 autosave 同时在路上时，基于删除前内存态的那次 PUT 会让卡片
+    # 「删了又自己长出来」。见 services.preserve_deleted_files。
+    norm = preserve_deleted_files(norm, cur_files)
 
     now = _now_iso()
     cols = extract_history_columns(norm)
@@ -1202,6 +1584,10 @@ async def _persist_transcribe_result(meeting_id: int, file_index: int, result: d
     if file_index < 0 or file_index >= len(files):
         return
     f = files[file_index]
+    # 槽位已被删除（墓碑）：结果无处可写。正常流程下删除路由会对在途任务返回 409，
+    # 但「任务刚提交 → 用户删卡 → 任务才结束」这一窗口仍存在，此处兜底丢弃。
+    if is_deleted_file(f):
+        return
     status = result.get("status")
     if status == transcribe_jobs.DONE:
         f["status"] = "done"
@@ -1241,6 +1627,10 @@ async def history_transcribe(meeting_id: int, file_index: int, hotword: str = Bo
     files = (item.get("payload") or {}).get("files") or []
     if file_index < 0 or file_index >= len(files):
         return JSONResponse({"ok": False, "error": "文件索引越界"}, status_code=404)
+    # 已删除的槽位没有音频可转写（墓碑的 audio_name 是空的），直接拒绝，
+    # 免得落进下面「音频尚未上传」那句会产生歧义的提示。
+    if is_deleted_file(files[file_index]):
+        return JSONResponse({"ok": False, "error": "该文件已删除"}, status_code=404)
     audio_name = files[file_index].get("audio_name") or ""
     path = await run_in_threadpool(audio_store.audio_path, meeting_id, audio_name)
     if not path:
@@ -1270,11 +1660,14 @@ async def history_events(meeting_id: int, request: Request):
 
     async def event_stream():
         try:
-            # 连接即发全量快照（进程内活动态覆盖落库态）
+            # 连接即发全量快照（进程内活动态覆盖落库态）。recordings 单独传入：
+            # 录音不属于转写登记表（不占推理锁、不进 _jobs），但同样是「活动态」，
+            # 前端据此渲染「录制中」并从真实起点续计时（刷新不归零）。
             snap = transcribe_jobs.snapshot_event(
                 payload,
                 _jobs.active_file_indices(meeting_id),
                 _jobs.active_started_at(meeting_id),
+                _recorder.active_started_at(meeting_id),
             )
             yield transcribe_jobs.sse_frame(snap)
             while True:
@@ -1317,7 +1710,14 @@ async def history_delete(meeting_id: int):
     先行后文件：即便删目录失败也只留孤儿音频（sweep_orphan_audio 兜底），
     不会出现“行在但音频没了”的破损记录。返回 { ok }；不存在 404。
     """
-    # 先取消该会议在途的后台转写任务，避免任务在删行后仍写回一条已不存在的记录
+    # 先停录音并收尾（补 WAV 头 → 落库 → 会提交一次转写），再取消在途任务、删行。
+    # 顺序要紧：反过来的话，删行后录音收尾的落库回调写回一条已不存在的记录，
+    # 音频目录紧接着被删，最后一段录音就白丢了。
+    try:
+        await _recorder.stop_meeting(meeting_id)
+    except Exception:  # 录音收尾失败不应阻止删会议
+        pass
+    # 再取消该会议在途的后台转写任务，避免任务在删行后仍写回一条已不存在的记录
     await _jobs.cancel_meeting(meeting_id)
     try:
         ok = await run_in_threadpool(db.delete_meeting, meeting_id)
@@ -1336,5 +1736,5 @@ async def history_delete(meeting_id: int):
 if __name__ == "__main__":
     import uvicorn
     host = os.environ.get("EDGEMINUTE_HOST", "0.0.0.0")
-    port = env_int("EDGEMINUTE_PORT", 8899)
+    port = env_int("EDGEMINUTE_PORT", 80)
     uvicorn.run(app, host=host, port=port)

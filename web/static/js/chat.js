@@ -157,7 +157,7 @@ async function readSSE(stream, asstMsg, bubble) {
 
 // 从某段转写引用到问答面板：插入「发言人：内容」并把光标置于其后
 export function quoteSegmentToChat(item, view) {
-  const quote = `「${speakerLabel(view.speaker)}：${(view.text || '').trim()}」\n`;
+  const quote = `「${view.name || speakerLabel(view.speaker)}：${(view.text || '').trim()}」\n`;
   const cur = chatInput.value;
   chatInput.value = cur ? (cur.replace(/\s*$/, '') + '\n' + quote) : quote;
   autoGrow();

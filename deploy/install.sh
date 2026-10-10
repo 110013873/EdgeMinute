@@ -220,3 +220,8 @@ if [[ ! -f "${PROJECT_DIR}/.env" ]]; then
   warn "未检测到 ${PROJECT_DIR}/.env —— 如需自定义配置，"
   warn "请 cp .env.example .env 后编辑，再 sudo systemctl restart edgeminute。"
 fi
+# 录音功能依赖宿主机 audio 组权限（单元已设 SupplementaryGroups=audio）。此处只做提示：
+# 若服务进程实际打不开 /dev/snd/*，journalctl 里会出现「无法启动录音：…」，
+# 用 `getent group audio` 确认组存在、并把麦克风设为其可访问即可。
+info "麦克风录音: 服务已具备 audio 组能力（SupplementaryGroups=audio）；"
+info "            插上 USB 麦后访问 会议录音 面板选择设备即可，无需额外配置。"

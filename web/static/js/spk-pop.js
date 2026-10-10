@@ -4,7 +4,7 @@
 import { state } from './state.js';
 import { $ } from './dom.js';
 import { escapeHtml, escapeAttr, cssEsc } from './util.js';
-import { allOriginalSpeakers, speakerColor, refreshSpeakerFilter } from './speakers.js';
+import { allOriginalSpeakers, speakerColor, refreshSpeakerFilter, clearRowSpeakers } from './speakers.js';
 import { attendeeList } from './meta-panel.js';
 import { renderResults } from './segments.js';
 import { pushUndo } from './undo.js';
@@ -13,6 +13,15 @@ import { icon } from './icons.js';
 import { openModal, closeModal, isModalOpen } from './modal.js';
 
 const spkPop = $('spkPop');
+
+// 该原始簇下有多少段带行级覆盖（speakerName）。这些段不走本面板的映射。
+function rowOverrideCount(sp) {
+  let n = 0;
+  for (const item of state.files)
+    for (const seg of item.segments)
+      if (String(seg.speaker) === String(sp) && (seg.speakerName || '').trim()) n++;
+  return n;
+}
 
 export function renderSpkPop() {
   const speakers = allOriginalSpeakers();
@@ -27,6 +36,12 @@ export function renderSpkPop() {
     const autoBadge = (auto && cur && cur === auto.name)
       ? `<span class="spk-auto" title="声纹自动识别，相似度 ${Number(auto.score).toFixed(2)}">${icon('mic', 13)}</span>`
       : '';
+    // 该簇下有多少段被行级覆盖改成了别的名字。不标出来的话，面板显示
+    // “说话人0 → 张三”，界面上却有几行写着李四，看着像 bug。
+    const overridden = rowOverrideCount(sp);
+    const rowBadge = overridden
+      ? `<span class="spk-rows" title="该簇有 ${overridden} 段在转写列表中被单独修改，不受此处映射影响">${overridden} 段已单独修改</span>`
+      : '';
     const opts = attendees.length
       ? `<select data-pick="${escapeAttr(sp)}">
           <option value="">选择参会人…</option>
@@ -39,7 +54,8 @@ export function renderSpkPop() {
       <span class="orig">${/^\d+$/.test(sp) ? '说话人'+sp : escapeHtml(sp)}${autoBadge}</span>
       ${opts}
       <input data-sp="${escapeAttr(sp)}" value="${escapeAttr(cur)}" placeholder="映射为，如 张三">
-    </div>`;
+    </div>
+    ${rowBadge ? `<div class="spk-row-note">${rowBadge}</div>` : ''}`;
   }).join('') || '<div class="pop-sub">转写后才会出现发言人</div>';
   spkPop.innerHTML = `
     <div class="pop-head">
@@ -77,6 +93,7 @@ export function renderSpkPop() {
     pushUndo();
     state.speakerMap = {};
     state.speakerAuto = {};  // 还原时一并清空自动识别记录
+    clearRowSpeakers();      // 行级覆盖一并清除——“全部还原”只清一半会让人以为没生效
     refreshSpeakerFilter(); renderResults(); renderSpkPop();
     scheduleAutoSave();
   });

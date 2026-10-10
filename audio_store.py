@@ -22,6 +22,12 @@ AUDIO_DIR = os.environ.get(
 # 单个音频文件大小上限（字节），默认 500MB
 AUDIO_MAX_BYTES = env_int("AUDIO_MAX_BYTES", 500 * 1024 * 1024)
 
+# 录音大小上限（字节），默认 10GB。与 AUDIO_MAX_BYTES 分开：那条只在 save_audio
+# 里边写边计数，而录音是 ffmpeg 直写目标文件，服务端不经手字节流，必须另立一道
+# 闸门（由 recorder.py 的看护协程轮询文件大小来执行），否则长会议会无声超限。
+# 10GB 对应约 15.5 小时——48k 立体声 16bit 是 192KB/s，比 16k 单声道的 32KB/s 快 6 倍。
+RECORD_MAX_BYTES = env_int("RECORD_MAX_BYTES", 10 * 1024 * 1024 * 1024)
+
 # 文件名清洗：仅保留字母数字、点、下划线、连字符；其余（含路径分隔符、空格）替换为下划线
 _UNSAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 # 常见音频扩展名白名单；未知扩展回退为 .bin
@@ -107,11 +113,67 @@ def audio_path(meeting_id: int, audio_name: str) -> str | None:
     return path if os.path.isfile(path) else None
 
 
+def recording_target(meeting_id: int, raw_name: str) -> tuple[str, str]:
+    """返回录音的目标绝对路径 `(raw_path, wav_path)`，并确保会议目录已创建。
+
+    这是**唯一**允许先于文件存在而返回路径的入口：录音必须把目标路径交给 ffmpeg
+    直接写（save_audio 以 "wb" 打开、只覆盖不追加，且服务端不经手字节流，用不了）。
+    正因如此，防护必须在**生成路径时**做，而不是像 audio_path 那样在读取时做。
+
+    raw_name 由 services.recording_raw_name 生成，理论上是受控的 `{index}_mic.raw`；
+    这里照搬 audio_path 的同一套校验（纯文件名 + commonpath 复检），使调用方即便
+    传入被污染的串也不会写到会议目录之外。
+    """
+    if not raw_name or os.path.basename(raw_name) != raw_name:
+        raise ValueError(f"非法录音文件名：{raw_name!r}")
+    dest_dir = _meeting_dir(meeting_id)
+    raw_path = os.path.normpath(os.path.join(dest_dir, raw_name))
+    if os.path.commonpath([os.path.abspath(dest_dir), os.path.abspath(raw_path)]) != os.path.abspath(dest_dir):
+        raise ValueError(f"录音路径越界：{raw_name!r}")
+    wav_path = raw_path[:-len(".raw")] + ".wav" if raw_path.endswith(".raw") else raw_path + ".wav"
+    os.makedirs(dest_dir, exist_ok=True)
+    return raw_path, wav_path
+
+
 def delete_meeting_audio(meeting_id: int) -> None:
     """删除某会议的整个音频子目录（幂等：目录不存在也不报错）。"""
     dest_dir = _meeting_dir(meeting_id)
     if os.path.isdir(dest_dir):
         shutil.rmtree(dest_dir, ignore_errors=True)
+
+
+def delete_file_audio(meeting_id: int, audio_name: str) -> bool:
+    """删除某会议下某个音频文件（含可能同名的采集裸流与错误日志）。
+
+    用于删除单个文件卡片——删除槽位时把它占的音频一起清掉，否则会成为无人引用的
+    孤儿（sweep_orphan_audio 只按会议目录扫，扫不到目录内的孤儿文件）。
+    与 delete_meeting_audio 一样幂等：文件不存在返回 False 而非报错。
+
+    顺带清理 `{stem}.raw` / `{stem}.raw.err`：录音的成品 WAV 与采集裸流同名不同
+    后缀，只删 WAV 会留下裸流；而裸流补头逻辑（启动扫描）只认 payload 里 status=
+    recording 的槽位，墓碑槽位不会被它捡回去，留下的裸流就是纯占位。
+    """
+    if not audio_name:
+        return False
+    # 复用 audio_path 的同一套穿越防护：先算路径，再确认它确实落在会议目录内。
+    # audio_path 要求文件存在（不存在返回 None），删除也应当如此——已不存在即无
+    # 事可做，返回 False。
+    path = audio_path(meeting_id, audio_name)
+    if not path:
+        return False
+    removed = False
+    stem = os.path.splitext(path)[0]
+    targets = [path]
+    if stem != path:
+        # 录音成品：连带采集裸流与其 stderr 日志（同名不同后缀）
+        targets += [stem + ".raw", stem + ".raw.err"]
+    for p in targets:
+        try:
+            os.remove(p)
+            removed = True
+        except OSError:
+            pass
+    return removed
 
 
 def sweep_orphan_audio(valid_ids: set[int]) -> list[str]:

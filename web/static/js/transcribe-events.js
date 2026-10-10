@@ -11,9 +11,10 @@
 import { state } from './state.js';
 import { ensureSpeakerColors, refreshSpeakerFilter, applySpeakerMatches } from './speakers.js';
 import { renderResults } from './segments.js';
-import { renderFileList, updateRunAllState } from './upload.js';
+import { renderFileList, updateRunAllState, applyTombstone } from './upload.js';
 import { scheduleAutoSave } from './autosave.js';
 import { startProgress, finishProgress, calibrateSpeed, clearAllProgress } from './progress.js';
+import { noteRecordingFrame } from './recorder.js';
 
 let es = null;          // 当前 EventSource
 let esMeetingId = null; // 当前订阅的会议 id
@@ -44,8 +45,17 @@ export function connect(meetingId) {
 // 快照：把各文件 status 对齐到服务端（仅覆盖非终态本地项，避免抹掉已渲染段落）
 function applySnapshot(ev) {
   const files = ev.files || [];
+  // 快照里带 deleted 的槽位在本端可能是完好的（本端没连上时别的标签页删了它）：
+  // 走 applyTombstone 走完整流程，而不是只改 status——否则 deleted 标志没置上，
+  // 本地这份「半墓碑」会在下一次自动保存时被写成一张内容完好的卡片，删除复活。
+  for (const sf of files) {
+    if (sf.status !== 'deleted') continue;
+    const item = state.files[sf.file_index];
+    if (item && !item.deleted) applyTombstone(sf.file_index);
+  }
   let touched = false;
   for (const sf of files) {
+    if (sf.status === 'deleted') continue;   // 上面已处理
     const item = state.files[sf.file_index];
     if (!item) continue;
     // 本地已是 done（有段落）则不因快照回退；其余以服务端为准
@@ -54,12 +64,26 @@ function applySnapshot(ev) {
     // 重连/刷新后若服务端仍在处理，按服务端下发的真实起点续跑进度条
     if (sf.status === 'processing') startProgress(item, sf.started_at);
   }
+  // 录制中的文件不属于转写流程：它的「已录时长」由 recorder.js 计时器负责，
+  // 这里只把按钮态对齐（快照里任一条目处于 recording 即视为本会议在录）。
+  const rec = files.find(sf => sf.status === 'recording');
+  noteRecordingFrame(rec ? 'recording' : '', rec && rec.started_at);
   if (touched) { renderFileList(); updateRunAllState(); }
 }
 
 function applyFileEvent(ev) {
   const item = state.files[ev.file_index];
   if (!item) return;
+  // 除「录制中」外的任何文件帧都意味着采集已结束：停掉录音条计时器/轮询。
+  // 停止录音的帧序是 recording → pending → queued → processing → done，
+  // 首个 pending 帧即在这里收尾，不必等下一次轮询。
+  if (ev.status !== 'recording') noteRecordingFrame('', 0);
+  if (ev.status === 'deleted') {
+    // 别的标签页删掉了这一段：本地也把它变成墓碑（同样不重排，下标保持稳定）。
+    // 只有本端发起删除时才带 deleted=true 的 payload，这里补的是「另一端删的」。
+    if (!item.deleted) applyTombstone(ev.file_index);
+    return;
+  }
   if (ev.status === 'done') {
     item.status = 'done';
     finishProgress(item, true);   // 进度补满 100% 并淡出
@@ -71,8 +95,14 @@ function applyFileEvent(ev) {
     finishProgress(item, false);  // 直接清除进度条
     renderFileList();
     updateRunAllState();
+  } else if (ev.status === 'recording') {
+    // 录音起止（本端或别的端发起）：对齐录音条按钮与计时器
+    noteRecordingFrame('recording', ev.started_at);
+    item.status = ev.status;
+    renderFileList();
+    updateRunAllState();
   } else {
-    item.status = ev.status;  // queued / processing
+    item.status = ev.status;  // pending / queued / processing
     if (ev.status === 'processing') startProgress(item, ev.started_at);  // 起跑假进度（含真实起点）
     renderFileList();
     updateRunAllState();
@@ -104,9 +134,15 @@ async function pullSegments(fileIndex) {
     const pf = ((data.item && data.item.payload && data.item.payload.files) || [])[fileIndex];
     const item = state.files[fileIndex];
     if (!pf || !item) return;
-    item.segments = (pf.segments || []).map(s => ({
-      start: s.start, end: s.end, speaker: s.speaker, text: s.text || '', flagged: !!s.flagged,
-    }));
+    item.segments = (pf.segments || []).map(s => {
+      const seg = {
+        start: s.start, end: s.end, speaker: s.speaker, text: s.text || '', flagged: !!s.flagged,
+      };
+      // 行级发言人覆盖：转写刚完成时一般还没有，但重新转写/拉回时可能已存在
+      const ov = (s.speakerName || '').trim();
+      if (ov) seg.speakerName = ov;
+      return seg;
+    });
     item.elapsed = pf.elapsed ?? item.elapsed;
     item.status = 'done';
     item.error = '';

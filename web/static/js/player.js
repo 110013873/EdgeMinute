@@ -51,7 +51,13 @@ export function updatePlaybar() {
 }
 
 export function playPause() {
-  if (!state.currentItem) { const f = state.files[0]; if (f) loadIntoPlayer(f, true); return; }
+  // 当前无选中时找第一个可播的文件。墓碑槽位必须跳过：它没有 url，落进播放器只会
+  // 让播放栏挂上一个已删除条目的标题。
+  if (!state.currentItem) {
+    const f = state.files.find(x => !x.deleted && x.status !== 'deleted');
+    if (f) loadIntoPlayer(f, true);
+    return;
+  }
   if (gAudio.paused) { gAudio.playbackRate = state.playbackRate; gAudio.play(); } else gAudio.pause();
 }
 

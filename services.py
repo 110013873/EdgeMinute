@@ -6,11 +6,14 @@
 """
 from __future__ import annotations
 
+import array
 import io
 import json
 import math
 import os
 import re
+import struct
+import sys
 from typing import Any
 
 
@@ -71,6 +74,28 @@ def speaker_display(raw: Any, speaker_map: dict[str, str] | None = None) -> str:
         if mapped and mapped.strip():
             return mapped.strip()
     return f"说话人{key}" if key.isdigit() else key
+
+
+def resolve_segment_speaker(
+    seg: dict, speaker_map: dict[str, str] | None = None
+) -> str:
+    """单段的发言人显示名，三层解析，优先级从高到低：
+
+      1. seg["speakerName"] —— 行级覆盖（转写列表里对单行的手动修正）
+      2. speaker_map[seg["speaker"]] —— 全局「映射发言人」（一个簇整场统一改名）
+      3. speaker_display 的默认值 —— “说话人N” / 原样
+
+    行级覆盖存在的理由：cam++ 有时把不同的人聚成同一个簇（张三和李四都成了
+    speaker 0），只靠按簇的 speakerMap 无法拆开。此时用户在列表里逐行改名，
+    结果只落在那几段的 speakerName 上，簇映射不受影响。
+
+    与前端 segmentLabel 语义保持一致——两处必须同步改，否则界面与导出/问答
+    会对同一段给出不同的名字。
+    """
+    override = str((seg or {}).get("speakerName", "") or "").strip()
+    if override:
+        return override
+    return speaker_display((seg or {}).get("speaker", "?"), speaker_map)
 
 
 def _join_text(a: str, b: str) -> str:
@@ -207,10 +232,10 @@ def build_speaker_blocks(
     """
     speaker_map = speaker_map or {}
     unit_of = _speaker_unit_map(attendees or [])
-    merged = merge_segments(segments or [], merge=True)
+    merged = merge_segments(segments or [], merge=True, speaker_map=speaker_map)
     blocks: list[dict] = []
     for s in merged:
-        name = speaker_display(s.get("speaker", "?"), speaker_map)
+        name = resolve_segment_speaker(s, speaker_map)
         blocks.append({
             "speaker": name,
             "unit": unit_of.get(name, ""),
@@ -311,17 +336,30 @@ def format_resolutions(raw: Any) -> str:
     return "\n".join(f"{i}. {item}" for i, item in enumerate(items, 1))
 
 
-def merge_segments(segments: list[dict], merge: bool = True) -> list[dict]:
+def merge_segments(
+    segments: list[dict],
+    merge: bool = True,
+    speaker_map: dict[str, str] | None = None,
+) -> list[dict]:
     """合并连续的同发言人段落，返回全新列表（不修改入参）。
 
     merge=False 时仅返回逐段浅拷贝（text 去空白），不做合并。
+
+    相邻判断用**解析后的显示名**（resolve_segment_speaker）而不是原始
+    seg["speaker"]：行级覆盖正是用来把「被 cam++ 并成同一个簇的两个人」拆开的，
+    若仍按簇合并，张三和李四的文本会被拼成一块、只显示块首那一行的名字，
+    列表上改完看着对了，导出与问答里却还是错的。
+    speaker_map 为 None 且各段都没有 speakerName 时，两种口径完全等价（旧行为不变）。
     """
     if not merge:
         return [{**seg, "text": (seg.get("text") or "").strip()} for seg in segments]
     out: list[dict] = []
     for seg in segments:
         last = out[-1] if out else None
-        if last is not None and str(last.get("speaker")) == str(seg.get("speaker")):
+        if last is not None and (
+            resolve_segment_speaker(last, speaker_map)
+            == resolve_segment_speaker(seg, speaker_map)
+        ):
             out[-1] = {
                 **last,
                 "end": seg.get("end", last.get("end")),
@@ -363,11 +401,15 @@ def build_template_context(
     speaker_map = options.get("speakerMap") or {}
     attendees = _normalize_attendees(meta)
 
-    merged = merge_segments(segments or [], merge=bool(options.get("mergeSpeaker", True)))
+    merged = merge_segments(
+        segments or [],
+        merge=bool(options.get("mergeSpeaker", True)),
+        speaker_map=speaker_map,
+    )
     seg_ctx = [
         {
             "time": f"{format_time(s.get('start', 0))}-{format_time(s.get('end', 0))}",
-            "speaker": speaker_display(s.get("speaker", "?"), speaker_map),
+            "speaker": resolve_segment_speaker(s, speaker_map),
             "text": s.get("text", ""),
         }
         for s in merged
@@ -422,8 +464,8 @@ def build_meeting_context(
         header_parts.append("参会人员：\n" + attendees_text)
     header = "【会议信息】\n" + ("\n".join(header_parts) if header_parts else "（无）")
 
-    merged = merge_segments(segments or [], merge=True)
-    lines = [f"{speaker_display(s.get('speaker', '?'), speaker_map)}：{s.get('text', '')}" for s in merged]
+    merged = merge_segments(segments or [], merge=True, speaker_map=speaker_map)
+    lines = [f"{resolve_segment_speaker(s, speaker_map)}：{s.get('text', '')}" for s in merged]
     body = "\n".join(lines) if lines else "（暂无转写内容）"
 
     truncated = False
@@ -687,13 +729,52 @@ MEETING_TRANSCRIBING = "transcribing"  # 至少一个文件排队/转写中
 MEETING_DONE = "done"             # 无进行中转写（全部完成或本就无需转写）
 
 # 文件级状态（仅存于 payload.files[]）
-_FILE_ACTIVE = {"queued", "processing"}  # 视为“转写进行中”的文件态
+# recording=服务端正在采集麦克风。它与 queued/processing 同属“进行中”，
+# 但走的是完全不同的收尾路径（停止录音 → 补 WAV 头 → 再提交转写）。
+_FILE_ACTIVE = {"queued", "processing", "recording"}  # 视为“进行中”的文件态
+
+# deleted=已删除的槽位。文件索引（file_index）同时是数组下标、路由参数、SSE 帧键、
+# 音频文件名前缀与在途任务身份（见 CLAUDE.md），因此删除**不做数组重排**——重排会
+# 让后续每个下标与磁盘上 {index}_ 开头的文件名全部错位，并让在途转写结果写回错误的
+# 槽位。删除改为原地留一个墓碑：槽位保留，内容清空。索引空间因此是「稳定的」，代价
+# 是数组里可能存在空洞，所有按下标遍历的地方都要容忍 deleted。
+FILE_DELETED = "deleted"
+
+
+def tombstone_file(entry: Any) -> dict:
+    """把一个文件条目原地改成墓碑（纯函数，返回新 dict）。
+
+    保留 id/name（列表里若还要显示「已删除」占位，名字仍可读），清空音频引用与段落，
+    置 status=deleted。清空 audio_name 是必须的：音频文件随删除一起从磁盘移除，
+    留着旧名会让 audio_path 去查一个已不存在的文件，且会让 `has_audio` 与事实不符。
+    """
+    raw = entry or {}
+    return {
+        "id": str(raw.get("id", "") or ""),
+        "name": str(raw.get("name", "") or ""),
+        "duration": None,
+        "elapsed": None,
+        "audio_name": "",
+        "has_audio": False,
+        "status": FILE_DELETED,
+        "segments": [],
+        "deleted": True,
+    }
+
+
+def is_deleted_file(entry: Any) -> bool:
+    """条目是否为墓碑（删除后遗留的空槽）。容忍 status 缺失的旧数据。"""
+    if not entry:
+        return False
+    if entry.get("deleted"):
+        return True
+    return str(entry.get("status", "") or "").strip() == FILE_DELETED
 
 
 def derive_meeting_status(files: list[dict]) -> str:
     """由文件级 status 汇总出会议级 status（纯函数）。
 
-    - 任一文件处于 queued/processing → transcribing
+    - 任一文件处于 queued/processing/recording → transcribing
     - 否则若存在任何已完成的转写结果（有 segments 的文件）→ done
     - 否则（无文件，或文件均无结果且未在转写）→ draft
     兼容旧 payload：文件无 status 字段时按“有无 segments”判定完成/草稿。
@@ -717,20 +798,36 @@ def _normalize_history_file(raw: Any) -> dict:
     for s in segs_in:
         if not isinstance(s, dict):
             continue
-        segments.append({
+        seg = {
             "start": float(s.get("start", 0) or 0),
             "end": float(s.get("end", 0) or 0),
             "speaker": s.get("speaker", "?"),
             "text": str(s.get("text", "") or ""),
             "flagged": bool(s.get("flagged", False)),
-        })
+        }
+        # 行级发言人覆盖（可选）：用户在转写列表里改单行发言人时写入，
+        # 优先级高于 speakerMap，只影响这一段。空值不写键，旧的 payload 保持原样。
+        speaker_name = str(s.get("speakerName", "") or "").strip()
+        if speaker_name:
+            seg["speakerName"] = speaker_name
+        segments.append(seg)
     audio_name = str(raw.get("audio_name", "") or "").strip()
     has_audio = raw.get("has_audio")
-    # 文件级状态：pending=待转写 / queued=排队 / processing=转写中 / done / error。
+    # 文件级状态：pending=待转写 / queued=排队 / processing=转写中 / recording=录制中
+    # / done / error / deleted=已删除的槽位（墓碑，见 tombstone_file）。
     # 兼容旧 payload（无 status）：有 segments 视为 done，否则 pending。
     status = str(raw.get("status", "") or "").strip()
     if not status:
         status = "done" if segments else "pending"
+    # 墓碑槽位：前端 PUT 是整份覆盖，保留这个标记才能让「删除」在后续 autosave 中
+    # 存活——否则下一次 PUT 会把墓碑归一化成一个空的 pending 卡片，删掉的文件复活。
+    deleted = bool(raw.get("deleted", False))
+    if deleted:
+        # 归一化边界即权威：墓碑一律清空运行期字段，不接受外部传入的段落/音频引用。
+        segments = []
+        audio_name = ""
+        has_audio = False
+        status = FILE_DELETED
     return {
         "id": str(raw.get("id", "") or ""),
         "name": str(raw.get("name", "") or ""),
@@ -740,6 +837,7 @@ def _normalize_history_file(raw: Any) -> dict:
         "has_audio": bool(has_audio) if has_audio is not None else bool(audio_name),
         "status": status,
         "segments": segments,
+        "deleted": deleted,
     }
 
 
@@ -800,11 +898,8 @@ def extract_history_columns(payload: dict) -> dict:
             duration += float(d)
         all_segments.extend(f.get("segments") or [])
 
-    speakers = {
-        speaker_display(s.get("speaker", "?"), speaker_map)
-        for s in all_segments
-    }
-    merged = merge_segments(all_segments, merge=True)
+    speakers = {resolve_segment_speaker(s, speaker_map) for s in all_segments}
+    merged = merge_segments(all_segments, merge=True, speaker_map=speaker_map)
     snippet = " ".join((s.get("text") or "").strip() for s in merged).strip()
     snippet = snippet[:HISTORY_SNIPPET_CHARS]
 
@@ -995,4 +1090,370 @@ def build_representative_segments(
     for spk, spans in by_spk.items():
         top = sorted(spans, key=lambda p: p[1] - p[0], reverse=True)[: max(1, max_segments)]
         out[spk] = sorted(top, key=lambda p: p[0])
+    return out
+
+
+# ---------- 麦克风录音：设备枚举 / 裸流收尾 / 电平（纯函数） ----------
+# 采集本身在 recorder.py（子进程 + 事件循环），此处只放不需要模型、不需要 GPU、
+# 不依赖服务进程即可单测的解析与封装逻辑，与上面的纯函数区同一约定。
+# 沿用本模块的“无 numpy”约束：RMS 用 stdlib 的 array 解 int16。
+
+# 采集格式：**按回放质量优先**选 48k 立体声 16bit，而不是迁就 ASR 的 16k 单声道。
+#
+# 为什么不再直接录 16k：录音停止后它同时还要被回放（「录音停止后就是一个普通文件」
+# 这条不变式），而 16k 的奈奎斯特上限只有 8k——清辅音（s/sh/f/x/c/q、t/k/p 的爆破段）
+# 的能量重心恰好在 4–8k 以上，被砍掉后现场听得清的话，回放就"听不清"了。
+# 元音几乎不受影响，所以听上去仍是人声，只是字与字分不开——这正是当初的故障现象。
+#
+# 转 16k 不再由采集端负责：ASR 侧本来就无条件转码（app.py 的 _ensure_audio_input
+# 对任何输入都跑一遍 ffmpeg → 16k 单声道 + 降噪/响度链），录音与上传走同一条路。
+# 而且 ffmpeg 的 swr 重采样器（多相滤波，带抗混叠低通）质量优于 ALSA plughw 的
+# 默认转换器——旧方案等于"先用差转换器损失一次，再让好转换器无事可做"。
+#
+# 代价：码率从 32KB/s 涨到 192KB/s（48k×2ch×2B），同一条 RECORD_MAX_BYTES 能录的
+# 时长缩到 1/6（默认 10GB 约 15.5 小时，改之前 2GB 约 18.6 小时）。见 .env 的说明。
+REC_SAMPLE_RATE = 48000
+REC_CHANNELS = 2
+REC_BITS = 16
+REC_RAW_EXT = ".raw"  # 采集期间的无头裸流
+REC_WAV_EXT = ".wav"  # 收尾后的成品（即 payload.audio_name）
+
+
+def format_plughw(dev: dict) -> str:
+    """把 parse_asound_cards 的一条设备写成 ffmpeg 可用的 ALSA 串。
+
+    优先用稳定的 CARD=<id>（USB 设备号重启会变，卡名不变）；卡名为空时退回数字
+    索引 `plughw:<card>,<dev>`。用 plughw 而非 hw：允许 ALSA 插件层替我们把设备
+    的原生格式对齐到 REC_* 那套 48k/立体声——设备本身就是 48k 立体声时这层空转，
+    是单声道或别的采样率时由它补齐，采集端不必为每种硬件写分支。
+    """
+    card_id = str((dev or {}).get("id", "") or "").strip()
+    if card_id:
+        return f"plughw:CARD={card_id},DEV={int(dev.get('device', 0))}"
+    return f"plughw:{int(dev.get('card', 0))},{int(dev.get('device', 0))}"
+
+
+# SoC 内部音频中枢的卡名标记（大小写不敏感的子串匹配）。
+# 这些卡在 /proc/asound 里同样报 capture>0——片上音频中枢能把任意内部通路
+# （ADMAIF / I2S / DMIC）路由成采集流——但它们背后没有任何物理输入，选中只会录到静音。
+# 一路列进下拉框，就把那唯一一个真麦克风淹没了（Jetson AGX Orin 上一个 APE 卡
+# 就能贡献十几行「NVIDIA Jetson AGX Orin APE」）。
+# 适配其它硬件时改这一行即可；两条兜底规则见 filter_capture_devices。
+_HUB_MARKERS = ("nvidia jetson", "tegra", "admaif", "dummy", "loopback")
+# 单独的 "APE" 按词匹配而不是子串：卡名里含 ape 的正常设备是存在的（如 Shaper）。
+_HUB_WORD = re.compile(r"\bape\b")
+
+
+def _is_internal_hub(dev: dict) -> bool:
+    """该设备是否属于 SoC 内部音频中枢（即：不是任何物理输入）。"""
+    hay = f"{dev.get('id', '')} {dev.get('name', '')}".lower()
+    return any(m in hay for m in _HUB_MARKERS) or bool(_HUB_WORD.search(hay))
+
+
+def filter_capture_devices(devices: list[dict], keep: str = "") -> list[dict]:
+    """滤掉 SoC 内部音频中枢，只留下真正接着麦克风的设备。
+
+    两条兜底规则保证「过滤」永远不会把录音入口本身弄没：
+    1. keep（即 RECORD_DEVICE）指向的设备永不滤除——用户显式配置了就尊重它，哪怕它
+       的名字看起来像内部设备；
+    2. 过滤后一个不剩时原样返回入参——宁可多显示几个噪音设备，也不能因为一份不认识的
+       卡名把功能整体变成「未检测到可用设备」。
+
+    因此这个函数只会「少显示」，不会让本来能录的机器变得不能录。
+    """
+    devs = list(devices or [])
+    out = [
+        d for d in devs
+        if not _is_internal_hub(d) or same_device(d.get("plughw"), keep)
+    ]
+    return out or devs
+
+
+def list_capture_devices(keep: str = "") -> list[dict]:
+    """枚举可采集的音频设备，附上 plughw 串（读 /proc/asound，Linux 专用）。
+
+    非 Linux（如开发机）没有 /proc/asound → 返回空表，上层据此隐藏录音 UI。
+    任何读取异常都降级为空表：录音是可选功能，不得影响服务其它部分。
+
+    解析后先过 filter_capture_devices 再返回。放在这里而不是各调用点，是为了让每个
+    调用方都自动拿到同一份「用户真正可以选的东西」——包括 pick_capture_device 的
+    devs[0] 兜底：不滤的话那个兜底恰好会选中卡号最小的内部中枢，录出一片静音。
+    keep 传 RECORD_DEVICE，使其显式配置的设备不被滤除。
+    """
+    try:
+        with open("/proc/asound/cards", "r", encoding="utf-8", errors="replace") as f:
+            cards_text = f.read()
+        with open("/proc/asound/pcm", "r", encoding="utf-8", errors="replace") as f:
+            pcm_text = f.read()
+    except OSError:
+        return []
+    out = []
+    for d in parse_asound_cards(cards_text, pcm_text):
+        out.append({**d, "plughw": format_plughw(d)})
+    return filter_capture_devices(out, keep)
+
+
+def recording_raw_name(file_index: int) -> str:
+    """录音采集期间的裸流文件名（相对会议目录）。"""
+    return f"{int(file_index)}_mic{REC_RAW_EXT}"
+
+
+def recording_wav_name(file_index: int) -> str:
+    """录音收尾后的 WAV 文件名（相对会议目录）；也是 payload.audio_name。"""
+    return f"{int(file_index)}_mic{REC_WAV_EXT}"
+
+
+def _norm_device(s: Any) -> str:
+    """plughw 串的归一化形式（去掉所有空白并转小写），用于设备串比较。"""
+    return "".join(str(s or "").split()).lower()
+
+
+def same_device(a: Any, b: Any) -> bool:
+    """两个 plughw 串是否指向同一设备（忽略大小写与空白）。
+
+    卡名的大小写由驱动决定，而用户是照着 `arecord -D <串>` 的写法手填 RECORD_DEVICE
+    的；严格相等会让只差大小写的配置静默落空、退到「第一个设备」——用户以为在录 USB
+    麦，实际录的是板载声卡，且没有任何提示。归一化后比较可消除这一类错配。
+    两边都为空时不算命中（否则未配置会被当成命中了空配置）。
+    """
+    na = _norm_device(a)
+    return bool(na) and na == _norm_device(b)
+
+
+def pick_capture_device(devices: list[dict], preferred: str = "") -> dict | None:
+    """从枚举结果里挑一个默认录音设备（纯函数，返回 None 表示无可用设备）。
+
+    优先级：RECORD_DEVICE 指定的 plughw 串命中 → 名称里带 USB 的（USB 麦是本职场景，
+    板载声卡多用于输出）→ 第一个可用设备。preferred 命不中时**不报错**而是继续回退：
+    设备换口/改名是常态，宁可回退也不该让录音入口整个不可用。
+
+    一个例外：**枚举结果为空**（非 Linux、或 /proc/asound 解析不出）而用户又显式配置了
+    RECORD_DEVICE 时，直接采信该串——用户能用 `arecord -D <串>` 录出音频就说明设备真实
+    存在，此时不可信的恰恰是枚举，而不是用户的配置。否则「arecord 能录、网页却说没有
+    可用设备」会成为一个无解的死角。
+    """
+    devs = list(devices or [])
+    want = (preferred or "").strip()
+    if want:
+        for d in devs:
+            if same_device(d.get("plughw"), want):
+                return d
+        if not devs:
+            return {"card": None, "device": None, "id": "", "name": want, "plughw": want}
+    if not devs:
+        return None
+    for d in devs:
+        if "usb" in str(d.get("name", "")).lower() or "usb" in str(d.get("id", "")).lower():
+            return d
+    return devs[0]
+
+
+_CARDS_LINE = re.compile(r"^\s*(\d+)\s+\[(.+?)\]\s*:\s*(.*)$")
+_PCM_LINE = re.compile(r"^\s*(\d+)-(\d+)\s*:\s*(.*)$")
+_CAPTURE_COUNT = re.compile(r"capture\s+(\d+)")
+
+
+def parse_asound_cards(cards_text: str, pcm_text: str) -> list[dict]:
+    """解析 /proc/asound/cards + /proc/asound/pcm，列出**可采集**的设备。
+
+    - 卡名列形如 ` 1 [Device   ]: USB-Audio - USB Audio Device`：取 `[..]` 内的
+      卡 id（供 `plughw:CARD=<id>,DEV=<n>` 寻址，比数字索引稳定，重启/换口不变），
+      以及 ` - ` 之后的友好描述作为显示名。
+    - PCM 列形如 `01-00: USB Audio : USB Audio : playback 1 : capture 1`：只保留
+      `capture N` 且 N>0 的设备——纯播放设备录不了音。
+    - 不做任何 IO，两份文本由调用方读入，便于用真实抓取内容做 fixture 单测。
+      解析不出内容时返回空表，调用方据此判定“无可用设备”。
+    返回 [{card, device, id, name}]，按 (card, device) 升序。
+    """
+    cards: dict[int, tuple[str, str]] = {}
+    for line in (cards_text or "").splitlines():
+        m = _CARDS_LINE.match(line)
+        if not m:
+            continue
+        card_id = m.group(2).strip()
+        desc = m.group(3).strip()
+        # `USB-Audio - USB Audio Device` → 破折号后才是友好名；没有则用整串
+        name = desc.split(" - ", 1)[1].strip() if " - " in desc else desc
+        cards[int(m.group(1))] = (card_id, name or card_id)
+
+    out: list[dict] = []
+    for line in (pcm_text or "").splitlines():
+        m = _PCM_LINE.match(line)
+        if not m:
+            continue
+        cap = _CAPTURE_COUNT.search(m.group(3))
+        if not cap or int(cap.group(1)) <= 0:
+            continue
+        card_no, dev_no = int(m.group(1)), int(m.group(2))
+        card_id, name = cards.get(card_no, ("", ""))
+        out.append({
+            "card": card_no,
+            "device": dev_no,
+            "id": card_id,
+            "name": name or f"card{card_no}",
+        })
+    out.sort(key=lambda d: (d["card"], d["device"]))
+    return out
+
+
+def build_wav_header(
+    data_bytes: int,
+    sample_rate: int = REC_SAMPLE_RATE,
+    channels: int = REC_CHANNELS,
+    bits: int = REC_BITS,
+) -> bytes:
+    """生成 44 字节 canonical PCM WAV 头，data 长度按入参给定。
+
+    录音期间写的是无头裸流（崩溃安全，见 wrap_raw_to_wav），停止时按文件**实际**
+    大小补上这个头。数据量远低于 4GB，标准 RIFF 足够，不需要 RF64 变体。
+    """
+    block_align = max(1, channels * bits // 8)
+    return struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF", 36 + int(data_bytes), b"WAVE",
+        b"fmt ", 16, 1, channels, sample_rate,
+        sample_rate * block_align, block_align, bits,
+        b"data", int(data_bytes),
+    )
+
+
+def wrap_raw_to_wav(
+    raw_path: str,
+    wav_path: str,
+    sample_rate: int = REC_SAMPLE_RATE,
+    channels: int = REC_CHANNELS,
+    bits: int = REC_BITS,
+) -> int:
+    """把裸 PCM 流封成 WAV（写标准头 + 流式拷贝数据），返回数据字节数。
+
+    长度以**实际文件大小**为准，而不是任何已有头部字段——正因如此，对「进程被杀、
+    头部从未回填」的残留文件同样成立，这正是选裸流采集的兑现点。分块拷贝，不整份
+    读入内存；目标已存在则覆盖，故重复调用幂等。raw 文件不删除，由调用方决定。
+    """
+    frame = max(1, channels * bits // 8)
+    size = os.path.getsize(raw_path)
+    data_bytes = size - (size % frame)  # 丢弃可能的半帧尾巴
+    with open(raw_path, "rb") as src, open(wav_path, "wb") as dst:
+        dst.write(build_wav_header(data_bytes, sample_rate, channels, bits))
+        remaining = data_bytes
+        while remaining > 0:
+            chunk = src.read(min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            dst.write(chunk)
+    return data_bytes
+
+
+def raw_pcm_seconds(
+    size_bytes: int,
+    sample_rate: int = REC_SAMPLE_RATE,
+    channels: int = REC_CHANNELS,
+    bits: int = REC_BITS,
+) -> float:
+    """由裸流字节数换算已录时长（秒）。按 REC_* 的 48k/立体声/16bit 即 192000 字节每秒。"""
+    frame = max(1, channels * bits // 8)
+    frames = max(0, int(size_bytes)) // frame
+    return frames / float(max(1, sample_rate))
+
+
+def pcm_rms_tail(raw_path: str, tail_bytes: int = 196608) -> float:
+    """读裸流**末尾**若干字节算 RMS（0.0–1.0），供电平表使用。
+
+    只看尾部是因为电平表要的是“此刻多大声”，读整个文件既慢又无意义。文件不存在、
+    短于一帧或读取失败一律返回 0.0（电平表静默归零，不打断录音）。用 stdlib 的
+    array 解 int16，不引入 numpy。
+
+    tail_bytes 默认 192000（≈1 秒）：48k/立体声下 192000 字节/秒，取满一秒才和
+    16k/单声道时代 32768 字节的观感一致。立体声的交错采样在这里无差别——RMS 求的是
+    左右两路混在一起的能量均值，与先下混再求一样。
+    """
+    try:
+        size = os.path.getsize(raw_path)
+    except OSError:
+        return 0.0
+    n = min(int(tail_bytes), size)
+    n -= n % 2  # int16 → 丢弃奇数字节
+    if n <= 0:
+        return 0.0
+    try:
+        with open(raw_path, "rb") as f:
+            f.seek(size - n)
+            data = f.read(n)
+    except OSError:
+        return 0.0
+    samples = array.array("h")
+    samples.frombytes(data)
+    if sys.byteorder == "big":
+        samples.byteswap()
+    if not samples:
+        return 0.0
+    total = 0
+    for s in samples:
+        total += s * s
+    return min(1.0, math.sqrt(total / len(samples)) / 32768.0)
+
+
+def build_recording_name(now: Any) -> str:
+    """生成录音条目显示名，如「麦克风录音 2026-09-24 14:30」。
+
+    now 接受 datetime，也接受 ISO 字符串（取到分钟、把 T 换成空格），便于路由直接
+    把 `_now_iso()` 的返回值传进来，避免两处各自格式化日期。
+    """
+    if hasattr(now, "strftime"):
+        stamp = now.strftime("%Y-%m-%d %H:%M")
+    else:
+        stamp = str(now or "").replace("T", " ").strip()[:16]
+    return f"麦克风录音 {stamp}".strip()
+
+
+def preserve_recording_file(payload: dict, file_index: int, entry: dict) -> dict:
+    """把仍在录制的文件条目强制保留进将要落库的 payload（纯函数，返回新 dict）。
+
+    前端 autosave 会整份 PUT 它内存里的 files 数组；若那份内存态早于录音开始，
+    这次 PUT 会把录音条目整个抹掉（服务端唯一会被前端覆盖的写入口就在这里）。护栏
+    刻意做窄：仅在 index 落在范围内时用服务端已知的条目覆盖该槽位，其余字段一律照旧。
+    entry 为空或越界则原样返回（不修改入参）。
+    """
+    if not entry or file_index < 0:
+        return payload
+    files = list((payload or {}).get("files") or [])
+    if file_index >= len(files):
+        return payload
+    files[file_index] = dict(entry)
+    out = dict(payload or {})
+    out["files"] = files
+    out["status"] = derive_meeting_status(files)
+    return out
+
+
+def preserve_deleted_files(payload: dict, stored_files: list[dict]) -> dict:
+    """把服务端已标记为墓碑的槽位强制保留进将要落库的 payload（纯函数，返回新 dict）。
+
+    与 preserve_recording_file 同源的护栏，防的是同一种竞争：删除请求（DELETE
+    路由）与前端 autosave（整份 PUT）可能同时在路上，若那次 PUT 基于删除之前的
+    内存态，就会把刚删掉的卡片原样写回来——表现为「删了又自己长出来」。
+
+    删除在语义上是**不可逆**的（没有撤销入口），因此这里可以对墓碑做单调保护：
+    只要服务端当前存的是墓碑，就无条件盖回去。反过来说，前端任何一次合法 PUT 都
+    不可能把一个墓碑槽位写回成有内容的条目，这条护栏不会挡住正常操作。
+    stored_files 为 nil 或与 payload.files 长度不符时原样返回（不修改入参）。
+    """
+    files = list((payload or {}).get("files") or [])
+    stored = stored_files or []
+    if len(stored) != len(files):
+        return payload
+    changed = False
+    for i, cur in enumerate(stored):
+        if not is_deleted_file(cur):
+            continue
+        if is_deleted_file(files[i]):
+            continue
+        files[i] = tombstone_file(cur)
+        changed = True
+    if not changed:
+        return payload
+    out = dict(payload or {})
+    out["files"] = files
+    out["status"] = derive_meeting_status(files)
     return out

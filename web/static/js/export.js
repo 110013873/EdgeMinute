@@ -4,7 +4,7 @@
 import { state } from './state.js';
 import { $, downloadBtn } from './dom.js';
 import { joinText } from './util.js';
-import { speakerLabel } from './speakers.js';
+import { segmentLabel } from './speakers.js';
 import { ensureSummary } from './summary.js';
 import { toast } from './ui-feedback.js';
 
@@ -14,7 +14,9 @@ function collectSegments(item) {
   const out = [];
   for (const seg of item.segments) {
     const last = out[out.length-1];
-    if (last && String(last.speaker) === String(seg.speaker))
+    // 按**显示名**合并，与后端 merge_segments 一致：行级覆盖把同一簇拆成两个人后，
+    // 若这里还按原始 speaker 合并，导出的发言稿会把刚改对的名字又并回去。
+    if (last && segmentLabel(last) === segmentLabel(seg))
       out[out.length-1] = { ...last, end: seg.end, text: joinText(last.text, seg.text) };
     else out.push({ ...seg, text: seg.text.trim() });
   }
@@ -31,12 +33,12 @@ function speakerUnit(label) {
 }
 
 function buildTranscriptText() {
-  const withResults = state.files.filter(f => f.segments.length > 0);
+  const withResults = state.files.filter(f => !f.deleted && f.status !== 'deleted' && f.segments.length > 0);
   const blocks = [];
   for (const item of withResults) {
     if (withResults.length > 1) blocks.push(`【${item.file.name}】`);
     for (const seg of collectSegments(item)) {
-      const label = speakerLabel(seg.speaker);
+      const label = segmentLabel(seg);
       const unit = speakerUnit(label);
       const head = unit ? `${label}（${unit}）` : label;
       const text = (seg.text || '').trim();
@@ -61,7 +63,7 @@ function triggerDownload(blob, ext, baseName) {
 
 // 文字发言稿：纯前端生成 .txt（逐段「发言人（单位）+ 换行 + 发言内容」，文件名=会议名称+发言稿）
 function exportTranscript() {
-  const withResults = state.files.filter(f => f.segments.length > 0);
+  const withResults = state.files.filter(f => !f.deleted && f.status !== 'deleted' && f.segments.length > 0);
   if (!withResults.length) { toast('没有可导出的转写内容', 'warn'); return; }
   const blob = new Blob([buildTranscriptText()], { type: 'text/plain;charset=utf-8' });
   const title = sanitizeName(state.meta.title) || '会议';
@@ -70,7 +72,7 @@ function exportTranscript() {
 
 // 会议纪要：把当前数据发给后端，用 templates/minutes.docx 渲染
 async function exportViaTemplate() {
-  const withResults = state.files.filter(f => f.segments.length > 0);
+  const withResults = state.files.filter(f => !f.deleted && f.status !== 'deleted' && f.segments.length > 0);
   // 汇总所有文件的段落（多文件时顺序拼接）
   const segments = [];
   for (const item of withResults) for (const seg of item.segments) segments.push(seg);

@@ -8,9 +8,10 @@
 // 约定：
 //  - 需要被“整体替换”的状态 → 挂在 state 上（state.files = state.files.filter(...)）
 //  - 生命周期内只做“原地增删”的集合/常量 → 用 export const 直接导出（见下方）
-// files: [{ id, file, url, status, segments:[{start,end,speaker,text,flagged}],
+// files: [{ id, file, url, status, segments:[{start,end,speaker,speakerName?,text,flagged}],
 //           elapsed, duration }]
 //   seg.speaker 始终保存 cam++ 原始值，永不改写；显示名走 speakerMap
+//   seg.speakerName（可选）= 行级发言人覆盖，只作用于这一段，优先级高于 speakerMap
 // ============================================================
 export const state = {
   files: [],
@@ -60,6 +61,9 @@ export const state = {
 
 // —— 生命周期内只做原地增删、无需整体替换的集合/常量 ——
 export const speakerColors = {};
+// 显示名 → 颜色。行级覆盖可以把同簇的两行拆成两个名字，视觉身份必须跟着名字走
+// （否则拆完两行同色，看着像没拆）。见 speakers.speakerNameColor。
+export const nameColors = {};
 export const COLOR_PALETTE = ['#4f8cff','#3ecf8e','#f2c14e','#e879a6','#a78bfa','#38bdf8','#fb923c','#34d399','#f472b6','#c084fc'];
 
 // 撤销/重做

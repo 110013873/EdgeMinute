@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 密纪 EdgeMinute 站点图标（浏览器标签页）。
+     深色圆角底 + accent 麦克风：标签栏多半是深色的，透明底的单色图形会糊掉，
+     自带底色才能在浅色/深色两套主题下都读得出来。麦克风轮廓与 web/static/js/icons.js
+     的 mic 图标同形（24 视框），这里居中放大 1.15 倍。 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <rect width="32" height="32" rx="7" fill="#0f1115"/>
+  <g transform="translate(2.2 2.2) scale(1.15)"
+     fill="none" stroke="#4f8cff" stroke-width="2"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+    <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+    <line x1="12" y1="19" x2="12" y2="23"/>
+  </g>
+</svg>

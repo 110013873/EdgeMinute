@@ -74,28 +74,28 @@ TARGET_SR = 16000
 
 
 def load_audio_16k_mono(path: str):
-    """用 soundfile 读整段音频 → 单声道 float32 → 线性重采样到 16k。返回 numpy 一维数组。
+    """用 soundfile 读整段音频 → 单声道 float32 → 重采样到 16k。返回 numpy 一维数组。
 
-    soundfile（libsndfile）不支持的格式（如 M4A/AAC）自动回退到 ffmpeg 子进程解码。
+    只有**本来就是 16k 单声道**的文件走 soundfile 直读这条快路；其余一律交给 ffmpeg
+    解码（_load_via_ffmpeg），soundfile（libsndfile）不支持的格式（如 M4A/AAC）亦然。
+
+    为什么不自己用 np.interp 线性插值重采样：线性插值**没有抗混叠低通**，降采样时
+    会把 8k 以上的能量折叠回 0–8k 变成混叠噪声。以前录音直接录成 16k 单声道，这段
+    代码对录音根本不触发；改成 48k 立体声采集后，每一次录音都会走降采样，线性插值的
+    缺陷就从"上传文件才偶尔碰到"变成"回放/声纹的常规路径"。ffmpeg 的 swr 是多相
+    滤波器且有正经的抗混叠，代价只是一次子进程——而这条路上本来就有它在兜底。
     """
     import numpy as np
     import soundfile as sf
 
     try:
-        audio, sr = sf.read(path, dtype="float32", always_2d=False)
+        info = sf.info(path)
+        if info.samplerate == TARGET_SR and info.channels == 1:
+            audio, _ = sf.read(path, dtype="float32", always_2d=False)
+            return np.asarray(audio, dtype="float32").reshape(-1)
     except Exception:
-        # M4A/AAC 等格式：用 ffmpeg 解码为原始 float32 PCM
-        audio, sr = _load_via_ffmpeg(path)
-    if getattr(audio, "ndim", 1) > 1:  # 多声道 → 取均值转单声道
-        audio = audio.mean(axis=1)
-    audio = np.asarray(audio, dtype="float32").reshape(-1)
-    if sr != TARGET_SR and audio.size > 0:
-        # 线性插值重采样到 16k
-        n_out = int(round(audio.size * TARGET_SR / sr))
-        if n_out > 0:
-            x_old = np.linspace(0.0, 1.0, num=audio.size, endpoint=False)
-            x_new = np.linspace(0.0, 1.0, num=n_out, endpoint=False)
-            audio = np.interp(x_new, x_old, audio).astype("float32")
+        pass  # 读不了 / 格式不认识 → 落到 ffmpeg
+    audio, _ = _load_via_ffmpeg(path)
     return audio
 
 

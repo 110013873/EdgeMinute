@@ -9,9 +9,10 @@ python-multipart>=0.0.6   # FastAPI 文件上传 (UploadFile) 所需
 funasr
 
 # 声纹登记/匹配：读取上传音频（切片）+ 向量运算
-# soundfile 用于把上传音频解码为 16k 单声道 PCM（不引入 ffmpeg）；
-# numpy 做重采样、切片拼接、L2 归一化与余弦相似度。funasr 已依赖 numpy，
-# 此处显式声明以固化声纹功能的直接依赖。
+# soundfile 走 16k 单声道文件的直读快路（存在时用），numpy 做切片拼接、L2 归一化与
+# 余弦相似度。非 16k 单声道的输入由 ffmpeg 子进程解码+重采样——那是外部二进制依赖，
+# 不是 Python 依赖，故此处无需新增条目（ffmpeg 已由 deploy/setup_funasr.sh 安装）。
+# funasr 已依赖 numpy，此处显式声明以固化声纹功能的直接依赖。
 numpy
 soundfile>=0.12.0
 

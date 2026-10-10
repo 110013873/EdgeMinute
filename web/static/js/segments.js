@@ -4,7 +4,7 @@
 import { state } from './state.js';
 import { $, resultsScroll, emptyHint } from './dom.js';
 import { escapeHtml, formatTime, joinText } from './util.js';
-import { speakerLabel, speakerColor, hexToDim, refreshSpeakerFilter, renameSpeakerLabel } from './speakers.js';
+import { segmentLabel, speakerNameColor, hexToDim, refreshSpeakerFilter, setRowSpeaker } from './speakers.js';
 import { seekAndPlay } from './player.js';
 import { pushUndo } from './undo.js';
 import { updateRunAllState } from './upload.js';
@@ -25,16 +25,19 @@ export function viewSegments(item) {
   const out = [];
   item.segments.forEach((seg, idx) => {
     if (state.speakerFilter && String(seg.speaker) !== state.speakerFilter) return;
+    const name = segmentLabel(seg);          // 三层解析后的显示名（行级覆盖优先）
     const last = out[out.length - 1];
-    if (merge && last && String(last.speaker) === String(seg.speaker) &&
+    if (merge && last && last.name === name &&
         last.srcIdx[last.srcIdx.length - 1] === idx - 1) {
-      // 与上一视图段连续且同发言人 → 合并（要求原始下标连续，避免筛选把不相邻段错误粘连）
+      // 与上一视图段连续且显示名相同 → 合并（要求原始下标连续，避免筛选把不相邻段错误粘连）。
+      // 按**显示名**而非原始簇判断：行级覆盖正是用来把被并成同簇的两个人拆开的，
+      // 若仍按簇合并，改完的名字会被相邻的同簇段吃掉，列表上看不出拆分效果。
       last.end = seg.end;
       last.text = joinText(last.text, seg.text);
       last.flagged = last.flagged || seg.flagged;
       last.srcIdx.push(idx);
     } else {
-      out.push({ start: seg.start, end: seg.end, speaker: seg.speaker,
+      out.push({ start: seg.start, end: seg.end, speaker: seg.speaker, name,
                  text: (seg.text || '').trim(), flagged: seg.flagged, srcIdx: [idx] });
     }
   });
@@ -43,7 +46,9 @@ export function viewSegments(item) {
 
 // ---------- 渲染结果 ----------
 export function renderResults() {
-  const withResults = state.files.filter(f => f.segments.length > 0);
+  // 墓碑槽位（已删除）永远没有段落，双条件过滤是刻意的冗余：万一某条路径（如撤销）
+  // 把段落写回了墓碑，结果区也不该把它渲染出来——卡片已经不在列表里了。
+  const withResults = state.files.filter(f => !f.deleted && f.status !== 'deleted' && f.segments.length > 0);
   if (withResults.length === 0) {
     resultsScroll.classList.add('empty');
     resultsScroll.innerHTML = '';
@@ -84,12 +89,13 @@ export function buildSegRow(item, view) {
   row.dataset.srcIdx = view.srcIdx.join(',');
   row.dataset.start = view.start;
   row.dataset.end = view.end;
-  row.style.borderLeftColor = speakerColor(view.speaker);
+  row.style.borderLeftColor = speakerNameColor(view.name);
   // 合并行文本只读（避免把多段编辑安全地写回原始数据）；单段行仍可编辑
   const editable = merged ? '' : 'contenteditable="true"';
+  const color = speakerNameColor(view.name);
   row.innerHTML = `
     <div class="time">${formatTime(view.start)}–${formatTime(view.end)}</div>
-    <div class="speaker" title="点击修改本段发言人" style="color:${speakerColor(view.speaker)};background:${hexToDim(speakerColor(view.speaker))};">${escapeHtml(speakerLabel(view.speaker))}</div>
+    <div class="speaker" title="点击修改本行发言人（只改本行，不影响其它行）" style="color:${color};background:${hexToDim(color)};">${escapeHtml(view.name)}</div>
     <div class="text" ${editable} spellcheck="false">${escapeHtml(view.text)}</div>
     <div class="rowbtns">
       <button class="rowbtn flag" title="标注声纹">${icon('flag', 15)}</button>
@@ -117,7 +123,7 @@ export function buildSegRow(item, view) {
     });
   }
   // 合并行文本只读：不拦截点击，冒泡到行 → 与点时间列一致，跳转并播放该段音频。
-  row.querySelector('.speaker').addEventListener('click', (e) => { e.stopPropagation(); beginSpeakerEdit(row.querySelector('.speaker'), view); });
+  row.querySelector('.speaker').addEventListener('click', (e) => { e.stopPropagation(); beginSpeakerEdit(row.querySelector('.speaker'), view, item); });
   // 常用操作外置：标注声纹 / AI 提问
   row.querySelector('.rowbtn.flag').addEventListener('click', (e) => { e.stopPropagation(); openAnnotatePopover(item, item.segments[firstIdx], e.currentTarget); });
   row.querySelector('.rowbtn.ai').addEventListener('click', (e) => { e.stopPropagation(); openChat(); quoteSegmentToChat(item, view); });
@@ -160,12 +166,13 @@ export function setActiveSeg(row) {
   state.activeSegEl = row;
 }
 
-// ---------- 发言人就地重命名（点击说话人标签 → 变可编辑输入框，无弹窗） ----------
-// 提交后把“当前显示名与本行相同”的所有原始发言人一并映射为新名字（走 speakerMap，
-// 绝不改写 seg.speaker，与手动映射保持同一显示不变量）。
-export function beginSpeakerEdit(spkEl, view) {
+// ---------- 发言人就地编辑（点击说话人标签 → 变可编辑输入框，无弹窗） ----------
+// 【只改本行】提交后把该行的显示名固定为输入值，写入 seg.speakerName（行级覆盖）。
+// 不碰 speakerMap、不改写 seg.speaker，所以其它同簇的行纹丝不动——这是用来修正
+// 「cam++ 把张三和李四并成同一个簇」这类错误的。要整簇统一改名，用「映射发言人」面板。
+export function beginSpeakerEdit(spkEl, view, item) {
   if (spkEl.querySelector('input')) return;             // 已在编辑中
-  const oldLabel = speakerLabel(view.speaker);
+  const oldLabel = view.name;                           // 本行当前显示名（可能已带行级覆盖）
   const input = document.createElement('input');
   input.className = 'speaker-edit';
   input.value = oldLabel;
@@ -227,8 +234,9 @@ export function beginSpeakerEdit(spkEl, view) {
     const next = input.value.trim();
     if (save && next && next !== oldLabel) {
       pushUndo();
-      renameSpeakerLabel(oldLabel, next);
-      renderResults();                                  // 重建整个列表：所有同名行同步更新
+      // 只写本行的所有原始段（合并行按 srcIdx 整体覆盖——用户点的是这一行）
+      setRowSpeaker(item, view.srcIdx, next);
+      renderResults();                                  // 重建列表：颜色/边界按新显示名重算
       scheduleAutoSave();
     } else {
       // 取消或未变更：还原本标签文本并去掉编辑态（下拉面板随 textContent 清空一并移除）

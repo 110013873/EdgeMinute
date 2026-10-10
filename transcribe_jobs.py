@@ -24,6 +24,9 @@ QUEUED = "queued"
 PROCESSING = "processing"
 DONE = "done"
 ERROR = "error"
+# 采集中的文件态：不由本模块产生（见 recorder.py），但快照要把服务端的在录态
+# 覆盖到落库态之上，故此处需要认识它。
+RECORDING = "recording"
 
 
 class JobState:
@@ -210,19 +213,29 @@ def sse_frame(event: dict) -> str:
 
 
 def snapshot_event(payload: dict, active_indices: list[int],
-                   started_at: dict[int, float] | None = None) -> dict:
+                   started_at: dict[int, float] | None = None,
+                   recordings: dict[int, float] | None = None) -> dict:
     """构造「连接即发」的全量快照事件：各文件当前 status（合并进程内活动态）。
 
     payload：会议当前 DB payload；active_indices：登记表中仍在跑的文件下标；
     started_at：{file_index: 起始墙钟秒}，让刷新/重连后进度条从真实进度续上。
+    recordings：{file_index: 起始墙钟秒}，服务端正在采集的文件——它们不属于转写
+    登记表（不占推理锁、不进 _jobs），故单独传入；前端据此渲染「录制中」并让计时器
+    从真实起点续走，而不是刷新后归零。
     进程内活动态优先于 payload 落库态（落库可能滞后于内存进度）。
     """
     files = (payload or {}).get("files") or []
     active = set(active_indices or [])
     starts = started_at or {}
+    recs = recordings or {}
     out_files = []
     for i, f in enumerate(files):
-        st = PROCESSING if i in active else str(f.get("status", "") or "")
+        if i in active:
+            st = PROCESSING
+        elif i in recs:
+            st = RECORDING
+        else:
+            st = str(f.get("status", "") or "")
         entry = {
             "file_index": i,
             "status": st or ("done" if (f.get("segments") or []) else "pending"),
@@ -230,6 +243,8 @@ def snapshot_event(payload: dict, active_indices: list[int],
         }
         if st == PROCESSING and starts.get(i):
             entry["started_at"] = starts[i]
+        if st == RECORDING and recs.get(i):
+            entry["started_at"] = recs[i]
         out_files.append(entry)
     return {
         "type": "snapshot",

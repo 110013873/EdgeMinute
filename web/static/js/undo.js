@@ -19,7 +19,13 @@ export function snapshot() {
 
 export function restore(snap) {
   const data = JSON.parse(snap);
-  for (const s of data.segments) { const f = state.files.find(x => x.id===s.id); if (f) f.segments = s.segs; }
+  // 墓碑槽位不参与撤销/重做：快照按下标+id 还原段落，若允许写回墓碑，一段已删除的
+  // 录音会带着文本重新出现在结果区（服务端下次归一化会再把它清掉，表现为文字闪一下
+  // 就没了）。删除是不可逆的，快照不该是它的后门。
+  for (const s of data.segments) {
+    const f = state.files.find(x => x.id === s.id);
+    if (f && !f.deleted && f.status !== 'deleted') f.segments = s.segs;
+  }
   state.speakerMap = data.speakerMap || {};
   state.meta = normalizeMeta(data.meta || state.meta);
   repopulateMeta();

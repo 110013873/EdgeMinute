@@ -8,7 +8,7 @@
 //   - 重置 undo/redo（恢复态即新基线）。
 // 监听 history.js 派发的 'history:open'（恢复）与 'history:new'（清空）。
 // ============================================================
-import { state, undoStack, redoStack, speakerColors, normalizeMeta } from './state.js';
+import { state, undoStack, redoStack, speakerColors, nameColors, normalizeMeta } from './state.js';
 import { gAudio } from './dom.js';
 import { repopulateMeta } from './meta-panel.js';
 import { ensureSpeakerColors, refreshSpeakerFilter } from './speakers.js';
@@ -48,6 +48,9 @@ function resetWorkspaceState() {
   if (state.chatAbort) { try { state.chatAbort.abort(); } catch (e) {} state.chatAbort = null; }
   state.chatHistory = [];
   for (const k of Object.keys(speakerColors)) delete speakerColors[k];
+  // 显示名配色（含行级覆盖产生的名字）也要清：留着会让上一场会议的人名颜色
+  // 带到下一场，同一个「张三」在两场里颜色不同，看着像 bug。
+  for (const k of Object.keys(nameColors)) delete nameColors[k];
   undoStack.length = 0;
   redoStack.length = 0;
 }
@@ -68,10 +71,16 @@ function rerenderAll() {
 // status 用 payload 落库值（draft/transcribing 会议含 pending/queued/processing/
 // error 文件），无 status 的旧记录按有无段落回退为 done/pending。
 function payloadFileToRuntime(pf, meetingId, idx) {
-  const segs = (pf.segments || []).map(s => ({
-    start: s.start, end: s.end, speaker: s.speaker,
-    text: s.text || '', flagged: !!s.flagged,
-  }));
+  const segs = (pf.segments || []).map(s => {
+    const seg = {
+      start: s.start, end: s.end, speaker: s.speaker,
+      text: s.text || '', flagged: !!s.flagged,
+    };
+    // 行级发言人覆盖（可能不存在——旧记录 / 未改过发言人）
+    const ov = (s.speakerName || '').trim();
+    if (ov) seg.speakerName = ov;
+    return seg;
+  });
   const status = pf.status || (segs.length ? 'done' : 'pending');
   return {
     id: pf.id || ('h' + idx),
@@ -84,6 +93,9 @@ function payloadFileToRuntime(pf, meetingId, idx) {
     duration: pf.duration ?? null,
     audio_name: pf.audio_name || '',
     has_audio: !!pf.has_audio,
+    // 墓碑（已删除的槽位）必须保留在 state.files 里：下标即 file_index，服务端不重排，
+    // 本地也不能重排，否则音频 URL 与在途任务全部错位。它只是不渲染卡片。
+    deleted: !!pf.deleted,
   };
 }
 
@@ -114,8 +126,10 @@ export async function restoreFromHistory(id) {
   rerenderAll();
   syncWorkspaceVisibility();
 
-  // 载入首个有音频的文件（无音频则载首个，仅显示文本）
-  const first = state.files.find(f => f.url) || state.files[0];
+  // 载入首个有音频的文件（无音频则载首个，仅显示文本）。
+  // 跳过墓碑槽位：它没有 url 也没有段落，落进播放器只会让人以为「删了还剩个空壳」。
+  const live = state.files.filter(f => !f.deleted && f.status !== 'deleted');
+  const first = live.find(f => f.url) || live[0];
   if (first) loadIntoPlayer(first, false);
 
   // 订阅该会议的转写进度（草稿/转写中会实时收到状态，完成态收快照即静默）
