@@ -60,6 +60,8 @@ export function renderSummary() {
   sec.appendChild(buildSumSection('overview', 'clipboard', '会议概要',
     summary.overview ? `<div class="bubble md">${renderMarkdown(summary.overview)}</div>` : '<span class="empty-note">（无概要）</span>',
     !summary.overview));
+  sec.appendChild(buildSumSection('topics', 'tag', '会议议题', buildTopicsHtml(summary.topics),
+    !(summary.topics && summary.topics.length)));
   sec.appendChild(buildSumSection('speakers', 'mic', '各发言人观点', buildSpeakersHtml(summary.speakers),
     !(summary.speakers && summary.speakers.length)));
   const resolutionsHtml = renderResolutions(summary.resolutions);
@@ -93,6 +95,17 @@ function buildSpeakersHtml(speakers) {
       <div class="sp-points bubble md">${renderMarkdown(sp.points || '')}</div>
     </div>`;
   }).join('');
+}
+
+function buildTopicsHtml(topics) {
+  if (!topics || !topics.length) return '<span class="empty-note">（未提炼到会议议题）</span>';
+  return topics.map(t => `
+    <div class="sum-topic-card">
+      <div class="sum-topic-name">${escapeHtml(t.topic || '议题')}</div>
+      ${t.discussion ? `<div class="sum-topic-disc bubble md">${renderMarkdown(t.discussion)}</div>` : ''}
+      ${t.conclusion ? `<div class="sum-topic-concl">结论：${renderMarkdown(t.conclusion)}</div>` : ''}
+      ${t.open_items ? `<div class="sum-topic-open">遗留事项：${renderMarkdown(t.open_items)}</div>` : ''}
+    </div>`).join('');
 }
 
 // 调用后端生成总结并写入 state（单一 fetch 收敛点）。

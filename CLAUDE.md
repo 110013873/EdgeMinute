@@ -30,7 +30,8 @@ FUNASR_DEVICE=cpu python app.py
 | `LLM_API_KEY` | `` (empty) | Bearer token, if the LLM requires one |
 | `LLM_TIMEOUT` | `1800` | LLM request timeout (seconds) for chat/agenda |
 | `SUMMARY_TIMEOUT` | `1800` | Timeout for the meeting-summary call (non-streaming, long output); floored to `LLM_TIMEOUT` |
-| `CHAT_MAX_CONTEXT_CHARS` | `24000` | Max transcript chars injected into the chat system prompt |
+| `CHAT_MAX_CONTEXT_CHARS` | `300000` | Max transcript chars injected into the chat system prompt |
+| `SUMMARY_MAX_CONTEXT_CHARS` | *(defaults to `CHAT_MAX_CONTEXT_CHARS`)* | Max transcript chars injected into the meeting-summary prompt. The summary has its own budget because it adds a 议题纪要 (topics) section and, when truncating, keeps head+tail instead of head-only |
 | `HISTORY_DB_PATH` | `data/meetings.db` | SQLite file for meeting history |
 | `AUDIO_DIR` | `data/audio` | Root dir for persisted meeting audio (per-meeting subdir) |
 | `AUDIO_MAX_BYTES` | `524288000` (500 MB) | Per-audio-file upload cap |
@@ -117,6 +118,7 @@ requirements.txt    — pinned deps (fastapi, uvicorn, funasr, httpx, docxtpl, p
 - `POST /export/docx-template` renders `templates/minutes.docx` with `{ meta, segments, options }` via docxtpl and streams back the filled `.docx`. `options` = `{ mergeSpeaker, timestamp, speaker, speakerMap }`. Rendering uses a Jinja env with `autoescape=True` so `< > &` in transcript text don't corrupt the document XML.
 - `POST /chat` proxies an OpenAI-compatible `/v1/chat/completions`. The server injects the meeting transcript (merged, budget-truncated) as a `system` message via `build_llm_messages`; front-end-supplied `system` messages are stripped. `stream:true` (default) transparently relays the upstream SSE via `StreamingResponse`; `stream:false` aggregates to `{ ok, content }`.
 - `POST /import-agenda` accepts an uploaded `.docx` agenda notice (multipart `file`, ≤5 MB), extracts its text (paragraphs **and** table cells) via `extract_docx_text`, asks the LLM (non-streaming, temperature 0.1) to return strict JSON, and parses it with `parse_agenda_json` (tolerant of code-fences / prose / raw newlines). Returns `{ ok, meta }` where `meta = { title, date, place, agenda, attendees:[{name,unit,title}] }`. Reuses the same LLM env config as `/chat`.
+- `POST /summarize` (non-streaming) builds the summary via `build_summary_messages` and parses `parse_summary_json` → `{ ok, summary:{overview, topics[], speakers[], resolutions[]} }`. The server reads the system hotword list (`hotwords.txt`) and injects it into the `system` prompt (via `_summary_hotword_guidance`, normalized + capped) so the model can locally correct ASR-misrecognized proper nouns against context + hotwords; no hotwords → prompt unchanged.
 
 **麦克风录音 (USB mic — server-side capture):**
 - Capture happens **on the server**, not in the browser. The mic is physically plugged into the Jetson, and the browser usually reaches the app over LAN `http://<host>:8899` — a non-secure context where `getUserMedia` is refused outright. `recorder.py` therefore shells out to `ffmpeg -f alsa`.
@@ -163,6 +165,7 @@ requirements.txt    — pinned deps (fastapi, uvicorn, funasr, httpx, docxtpl, p
 
 **Meeting-minutes template (`templates/minutes.docx`):**
 - Edit it in Word like any document; placeholders use docxtpl/Jinja2 syntax: `{{ title }}`, `{{ date }}`, `{{ place }}`, `{{ attendees }}`, `{{ agenda }}`, and a segment loop `{%p for seg in segments %}` … `{{ seg.time }}` / `{{ seg.speaker }}` / `{{ seg.text }}` … `{%p endfor %}`, gated by `{% if show_timestamp %}` / `{% if show_speaker %}`.
+- **会议议题 (topics) section** renders from `{%p for t in topics %}` … `{{ t.topic }}` / `{{ t.discussion }}` (indented) / `{% if t.conclusion %}结论：{{ t.conclusion }}{% endif %}` / `{% if t.open_items %}遗留事项：{{ t.open_items }}{% endif %}` … `{%p endfor %}`. `topics` is a list of `{topic, discussion, conclusion, open_items}` where `discussion`/`conclusion`/`open_items` are `\n`-joined **strings** (folded from the LLM's string arrays at the parse boundary), so `{{ t.discussion }}` emits one line per `<w:br/>`-converted `\n`. The section is inserted as `三、会议议题` between 概要 and `四、各发言人意见` (决议 renumbered to `五、会议决议`).
 - `{{ attendees }}` is a single **multi-line string** (`\n`-joined); docxtpl auto-converts `\n` to `<w:br/>`, so each attendee lands on its own line inside the cell.
 - To change the exported format, replace this file in place — no code change needed. The context keys above are the contract (`build_template_context` in `services.py`).
 

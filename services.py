@@ -263,13 +263,41 @@ def build_speaker_opinions(
         if not isinstance(s, dict):
             continue
         speaker = str(s.get("speaker", "") or "").strip()
-        points = str(s.get("points", "") or "").strip()
+        points = _join_points(s.get("points"))
         if not (speaker or points):
             continue
         out.append({
             "speaker": speaker,
             "unit": unit_of.get(speaker, ""),
             "points": points,
+        })
+    return out
+
+
+def build_topics(topics: list[dict] | None) -> list[dict]:
+    """由会议总结的 topics 构造模板用的议题列表（纯函数）。
+
+    返回 [{topic, discussion, conclusion, open_items}]：
+    - 各字段去首尾空白；discussion/open_items 已由 parse_summary_json 归一化为
+      \\n 分隔字符串（docxtpl 会把 \\n 自动转 <w:br/>）。
+    - conclusion 为空时回退为“未明确”（模板里结论标签始终可见）。
+    - 仅保留至少一个字段非空的条目。
+    """
+    out: list[dict] = []
+    for t in topics or []:
+        if not isinstance(t, dict):
+            continue
+        topic = str(t.get("topic", "") or "").strip()
+        discussion = str(t.get("discussion", "") or "").strip()
+        conclusion = str(t.get("conclusion", "") or "").strip()
+        open_items = str(t.get("open_items", "") or "").strip()
+        if not (topic or discussion or conclusion or open_items):
+            continue
+        out.append({
+            "topic": topic,
+            "discussion": discussion,
+            "conclusion": conclusion or "未明确",
+            "open_items": open_items,
         })
     return out
 
@@ -385,11 +413,12 @@ def build_template_context(
     """构造 docxtpl 渲染上下文。
 
     options: {mergeSpeaker, timestamp, speaker, speakerMap}
-    summary: {overview, speakers:[{speaker,points}], resolutions}
+    summary: {overview, topics:[{topic,discussion,conclusion,open_items}], speakers:[{speaker,points}], resolutions}
              （会议总结，可选；缺失时对应占位符渲染为空）
     - meta 缺失字段填空串；title 缺失回退为“会议纪要”
     - segments 依据 mergeSpeaker 合并，发言人经 speakerMap 解析显示名
     - 参会人员按单位分组（{{ attendees }}）
+    - 议题纪要取自 summary.topics（{{ topics }}，每项 {topic,discussion,conclusion,open_items}）
     - 各发言人意见取自 summary.speakers 的“核心观点总结”（{{ speaker_opinions }}，
       每项 {speaker, unit, points}），不再放原始转写内容
     - 会议概要 {{ overview }}；会议决议 {{ resolutions }}（已按序号逐条换行）
@@ -426,6 +455,8 @@ def build_template_context(
     ctx["segments"] = seg_ctx
     # 各发言人意见：取自会议总结的核心观点（{%p for b in speaker_opinions %}）
     ctx["speaker_opinions"] = build_speaker_opinions(summary.get("speakers"), attendees)
+    # 议题纪要：取自会议总结的 topics（{%p for t in topics %}）；旧模板无此占位符时被忽略
+    ctx["topics"] = build_topics(summary.get("topics"))
     # 兼容保留：原始转写分段（旧模板 {%p for b in speaker_blocks %} 仍可用）
     ctx["speaker_blocks"] = build_speaker_blocks(segments or [], speaker_map, attendees)
     # 会议概要 / 会议决议：来自会议总结（缺失时留空，模板占位符渲染为空串）
@@ -438,14 +469,16 @@ def build_template_context(
 def build_meeting_context(
     meta: dict,
     segments: list[dict],
-    budget: int = 24000,
+    budget: int = 300000,
     speaker_map: dict[str, str] | None = None,
+    keep_tail: bool = False,
 ) -> str:
     """把会议信息 + 转写文本拼装为注入 LLM 的上下文文本，按字符预算裁剪。
 
     speaker_map：发言人映射（如 {"0": "张三"}），使注入 LLM 的转写文本用
     映射后的姓名而非“说话人0”，否则用户按姓名提问时模型找不到对应发言。
-    超预算时保留**开头**（会议通常前部信息密度高），并在末尾标注“已截断”。
+    超预算时默认保留**开头**（问答场景，前部信息密度高）；keep_tail=True 时
+    保留开头+结尾（总结场景，结论/决议常在会议后半段），并标注“已截断”。
     """
     meta = meta or {}
     speaker_map = speaker_map or {}
@@ -470,16 +503,44 @@ def build_meeting_context(
 
     truncated = False
     if len(body) > budget:
-        cut = body[:budget]
-        # 尽量在行边界截断，避免切断一句话；找不到换行则硬截
-        nl = cut.rfind("\n")
-        body = cut[:nl] if nl > 0 else cut
+        if keep_tail:
+            body = _truncate_head_tail(body, budget)
+        else:
+            cut = body[:budget]
+            # 尽量在行边界截断，避免切断一句话；找不到换行则硬截
+            nl = cut.rfind("\n")
+            body = cut[:nl] if nl > 0 else cut
         truncated = True
 
     parts = [header, "\n【会议记录】\n" + body]
     if truncated:
-        parts.append("\n（注：会议记录较长，以上仅为按时间顺序保留的前段内容，后续部分已省略。）")
+        note = (
+            "（注：会议记录较长，以上保留了开头与结尾部分，中间内容已省略。）"
+            if keep_tail else
+            "（注：会议记录较长，以上仅为按时间顺序保留的前段内容，后续部分已省略。）"
+        )
+        parts.append("\n" + note)
     return "\n".join(parts)
+
+
+def _truncate_head_tail(body: str, budget: int) -> str:
+    """超预算时保留开头（60%）+结尾（40%），掐掉中间，并在断点处标注省略。
+
+    两段都在行边界裁剪，避免从半句断开。结尾段至关重要：会议决议/待办通常
+    出现在后半段，只留开头会丢掉结论。
+    """
+    head_chars = int(budget * 0.6)
+    tail_chars = budget - head_chars
+
+    head = body[:head_chars]
+    nl = head.rfind("\n")
+    head = head[:nl] if nl > 0 else head
+
+    tail = body[len(body) - tail_chars:]
+    nl = tail.find("\n")
+    tail = tail[nl + 1:] if 0 <= nl < len(tail) - 1 else tail
+
+    return head + "\n……（中间部分内容已省略）……\n" + tail
 
 
 SYSTEM_PROMPT_TEMPLATE = (
@@ -488,7 +549,7 @@ SYSTEM_PROMPT_TEMPLATE = (
 )
 
 
-def build_llm_messages(payload: dict, budget: int = 24000) -> list[dict]:
+def build_llm_messages(payload: dict, budget: int = 300000) -> list[dict]:
     """把会议上下文注入 system，与前端传来的对话历史拼接。
 
     payload: { meta, segments, speakerMap, messages:[{role,content}] }
@@ -513,56 +574,107 @@ def build_llm_messages(payload: dict, budget: int = 24000) -> list[dict]:
 
 _SUMMARY_SYSTEM_PROMPT = (
     "你是一个专业的会议纪要助手。用户会提供一场会议的完整记录（含发言人与发言内容）。"
-    "请通读全部记录，撰写一份**详实、完整**的会议总结，并**只输出一个 JSON 对象**，"
+    "请通读全部记录，撰写一份**详实、准确、忠于原文**的会议总结，并**只输出一个 JSON 对象**，"
     "不要输出任何解释、前后缀或 Markdown 代码块围栏。\n"
     "JSON 结构如下：\n"
     "{\n"
-    '  "overview": "会议概要（字符串，300-500字，说明会议主题与背景、讨论的主要议题、各方达成的共识与分歧、核心结论）",\n'
-    '  "speakers": [ { "speaker": "发言人姓名或标识", "points": "该发言人的观点详述（字符串）" } ],\n'
-    '  "resolutions": [ "决议条目一", "决议条目二" ]\n'
+    '  "overview": "会议概要（字符串，200-400字：会议背景与目标、讨论了哪些议题、达成的主要共识、存在的分歧、核心结论）",\n'
+    '  "topics": [ { "topic": "议题名称（字符串）", "discussion": ["讨论要点一", "讨论要点二"], "conclusion": "该议题的结论（字符串）", "open_items": "该议题遗留的未决事项（字符串，无则空串）" } ],\n'
+    '  "speakers": [ { "speaker": "发言人姓名", "points": ["观点要点一", "观点要点二"] } ],\n'
+    '  "resolutions": [ "事项｜责任人｜时间节点" ]\n'
     "}\n"
     "规则：\n"
-    "- **speakers 是重点，务必详尽**：逐一覆盖每位有实质发言的发言人，不要遗漏。"
-    "每位的 points 需完整归纳其观点，包括：提出的主张或立场、支撑的理由或依据、"
-    "给出的建议或方案、提到的数据/事实/案例、表达的疑虑或反对意见、以及对他人观点的回应。"
-    "应展开成多个要点（用换行分隔的分点文本，通常 3-6 点，内容多时可更多），"
-    "而非一两句带过；宁可详实，避免过度精炼导致信息缺失。\n"
+    "- **topics（议题）是重点，务必完整**：优先按会议议程或讨论脉络归纳议题（通常 2-8 个），"
+    "不要只做按发言人的流水账。每个议题都要给出 discussion（分点讨论要点，含各方观点与争论焦点，"
+    "字符串数组，通常 3-6 点）与 conclusion（该议题达成的结论/共识；未达成一致时明确写“未达成共识”）；"
+    "确有遗留问题的填 open_items，否则为空字符串。\n"
+    "- **提炼而非复述**：用自己的话概括，不逐字抄录转写；但不得编造记录中不存在的事实、数字或承诺，"
+    "信息不足时如实说明。\n"
+    "- speakers 逐一覆盖每位有实质发言的发言人，不要遗漏；points 用字符串数组（通常 3-6 条），"
+    "每条一句话概括一个观点/主张/依据/疑虑。\n"
+    "- resolutions 每条一个决议或待办，统一格式“事项｜责任人｜时间节点”；某字段缺失用“待定”占位；"
+    "无明确决议时返回 [\"本次会议未形成明确决议\"]。\n"
     "- 发言人标识沿用会议记录中出现的名称（如“张三”“说话人0”）。\n"
-    "- resolutions 为字符串数组，每个元素是一条决议/待办（尽量含责任人、时间节点、具体事项），"
-    "不要在元素内自带序号；无明确决议则返回只含一句说明的数组（如 [\"本次会议未形成明确决议\"]）。\n"
-    "- 忠于会议记录，全面提炼记录中的实质信息，但不要编造记录中不存在的内容；"
-    "记录为空或信息不足时如实说明。\n"
-    "- overview/points 使用简洁清晰的中文；points 用换行分隔的分点文本。"
-    "整体必须是可被 JSON.parse 直接解析的纯 JSON（换行在 JSON 字符串中写作 \\n）。"
+    "- discussion/points 必须以字符串数组输出（不要输出含换行符的单个大字符串）；"
+    "整体必须是可被 JSON.parse 直接解析的纯 JSON。"
 )
+
+
+_SUMMARY_HOTWORDS_MAX_CHARS = 4000  # 注入总结提示词的热词表长度上限，防止超长列表挤占上下文预算
+
+_SUMMARY_HOTWORD_GUIDANCE = (
+    "热词表（可能是语音识别误写的专有名词、人名、地名或术语，供你校正）：{hotwords}\n"
+    "注意：会议转写文本可能存在语音识别误差（同音错字、专有名词误写）。"
+    "请在总结时结合上下文语境与上述热词表，对明显写错的词做**局部校正**"
+    "（例如把同音错字还原为热词表中的正确写法）；"
+    "只做有把握的修正，不得因此改动发言的实质内容，也不得凭空编造记录中不存在的信息。"
+)
+
+
+def _summary_hotword_guidance(hotwords: str, max_chars: int = _SUMMARY_HOTWORDS_MAX_CHARS) -> str:
+    """把系统热词表渲染成注入总结提示词的校正说明；空/无热词返回空串。
+
+    热词先用 normalize_hotword 归一化为空格分隔单行（与 ASR 同一约定），再按
+    max_chars 截断，防止超长热词表挤占总结上下文预算。纯函数，便于单测。
+    """
+    normalized = normalize_hotword(hotwords or "")
+    if not normalized:
+        return ""
+    if len(normalized) > max_chars:
+        normalized = normalized[:max_chars] + "…"
+    return _SUMMARY_HOTWORD_GUIDANCE.format(hotwords=normalized)
 
 
 def build_summary_messages(
     meta: dict,
     segments: list[dict],
-    budget: int = 24000,
+    budget: int = 300000,
     speaker_map: dict[str, str] | None = None,
+    keep_tail: bool = True,
+    hotwords: str = "",
 ) -> list[dict]:
     """构造会议总结的 LLM 消息（system 约束 JSON 输出 + user 提供会议上下文）。
 
     复用 build_meeting_context 注入会议信息与转写文本，speaker_map 使发言人
     以映射后的姓名出现（如 0→张三），与问答 /export 行为一致。
+    keep_tail=True 时超预算截断保留开头+结尾（议题结论/决议常在会议后半段，
+    不能像问答那样只留开头）。
+    hotwords：系统配置的热词表（原始文本）；非空时追加到 system 提示词末尾，
+    提示模型结合语境对 ASR 误识别的专有名词做局部校正。空串时不追加（旧行为不变）。
     """
     context = build_meeting_context(
-        meta or {}, segments or [], budget=budget, speaker_map=speaker_map or {}
+        meta or {}, segments or [], budget=budget, speaker_map=speaker_map or {}, keep_tail=keep_tail
     )
     user = context + "\n\n请依据以上会议内容进行总结，并按要求只输出 JSON。"
+    system = _SUMMARY_SYSTEM_PROMPT
+    guidance = _summary_hotword_guidance(hotwords)
+    if guidance:
+        system = system + "\n\n" + guidance
     return [
-        {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
+        {"role": "system", "content": system},
         {"role": "user", "content": user},
     ]
+
+
+def _join_points(points: Any) -> str:
+    """把 points/discussion 归一化为 \\n 分隔的多行字符串（兼容 list/str/None）。
+
+    LLM 被要求以字符串数组输出（JSON 更不易出错），此处立即折叠回字符串，
+    使下游（前端 renderMarkdown、模板 {{ b.points }} / {{ t.discussion }}、
+    历史存档）始终拿到字符串，存储契约不变。
+    """
+    if isinstance(points, (list, tuple)):
+        return "\n".join(str(p or "").strip() for p in points if str(p or "").strip())
+    return str(points or "").strip()
 
 
 def parse_summary_json(raw: str) -> dict:
     """解析 LLM 返回的总结 JSON，返回归一化后的结构。
 
     容错：去代码围栏、抽取首个平衡 {}、严格校验。解析失败抛 ValueError。
-    返回：{overview:str, speakers:[{speaker,points}], resolutions:[str]}
+    返回：{overview:str, speakers:[{speaker,points}], resolutions:[str], topics:[...]}
+    - points：LLM 以字符串数组输出（JSON 更稳），此处归一化为 \\n 分隔字符串。
+    - topics：新增议题纪要 [{topic,discussion,conclusion,open_items}]；旧数据/未输出时为空列表。
     """
     try:
         obj = json.loads(_extract_json_object(raw), strict=False)
@@ -578,12 +690,32 @@ def parse_summary_json(raw: str) -> dict:
             if not isinstance(s, dict):
                 continue
             speaker = str(s.get("speaker", "") or "").strip()
-            points = str(s.get("points", "") or "").strip()
+            points = _join_points(s.get("points"))
             if speaker or points:
                 speakers.append({"speaker": speaker, "points": points})
 
+    topics: list[dict] = []
+    raw_topics = obj.get("topics")
+    if isinstance(raw_topics, list):
+        for t in raw_topics:
+            if not isinstance(t, dict):
+                continue
+            topic = str(t.get("topic", "") or "").strip()
+            discussion = _join_points(t.get("discussion"))
+            conclusion = str(t.get("conclusion", "") or "").strip()
+            open_items = _join_points(t.get("open_items"))
+            if not (topic or discussion or conclusion or open_items):
+                continue
+            topics.append({
+                "topic": topic,
+                "discussion": discussion,
+                "conclusion": conclusion,
+                "open_items": open_items,
+            })
+
     return {
         "overview": str(obj.get("overview", "") or "").strip(),
+        "topics": topics,
         "speakers": speakers,
         "resolutions": normalize_resolutions(obj.get("resolutions")),
     }
@@ -1091,6 +1223,24 @@ def build_representative_segments(
         top = sorted(spans, key=lambda p: p[1] - p[0], reverse=True)[: max(1, max_segments)]
         out[spk] = sorted(top, key=lambda p: p[0])
     return out
+
+
+def normalize_hotword(hotword: str) -> str:
+    """把 SeACo 热词输入归一化为空格分隔的单行文本。
+
+    换行、英文逗号、中文逗号都会让 SeACo 的热词解析错位（它期望单行、空格分隔），
+    统一替换成空格再去首尾空白。纯函数，便于单测。
+    """
+    if not hotword:
+        return ""
+    return (
+        str(hotword)
+        .replace("\r", " ")
+        .replace("\n", " ")
+        .replace(",", " ")
+        .replace("，", " ")
+        .strip()
+    )
 
 
 # ---------- 麦克风录音：设备枚举 / 裸流收尾 / 电平（纯函数） ----------

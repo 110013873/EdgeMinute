@@ -96,6 +96,7 @@ async function exportViaTemplate() {
       if (summary) {
         summaryPayload = {
           overview: summary.overview || '',
+          topics: summary.topics || [],
           speakers: summary.speakers || [],
           resolutions: Array.isArray(summary.resolutions) ? summary.resolutions : (summary.resolutions || []),
         };

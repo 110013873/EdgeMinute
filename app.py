@@ -60,8 +60,9 @@ from services import (
     group_by_date,
     is_deleted_file,
     list_capture_devices,
-    pick_capture_device,
     match_speakers,
+    normalize_hotword,
+    pick_capture_device,
     parse_agenda_json,
     parse_summary_json,
     preserve_deleted_files,
@@ -75,7 +76,7 @@ from services import (
 )
 
 # ---------- 配置 ----------
-#MODEL_ID = "iic/speech_paraformer-large-vad-punc_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
+#MODEL_ID = "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
 MODEL_ID = "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
 DEVICE = os.environ.get("FUNASR_DEVICE", "cuda")
 
@@ -92,7 +93,10 @@ LLM_TIMEOUT = env_float("LLM_TIMEOUT", 1800.0)
 # 普通问答。给它独立且充足的超时，避免因 .env 里 LLM_TIMEOUT 偏小而在生成中途
 # 被客户端断开（llama-server 侧表现为 cancel task，app 侧回 502）。默认取两者较大值。
 SUMMARY_TIMEOUT = max(env_float("SUMMARY_TIMEOUT", 1800.0), LLM_TIMEOUT)
-CHAT_MAX_CONTEXT_CHARS = env_int("CHAT_MAX_CONTEXT_CHARS", 24000)
+CHAT_MAX_CONTEXT_CHARS = env_int("CHAT_MAX_CONTEXT_CHARS", 300000)
+# 会议总结专用上下文预算：默认继承问答预算，可单独调低以适配本地模型上下文窗口。
+# 总结输出新增“议题纪要”（topics），且超预算时保留开头+结尾，故与问答分开配置。
+SUMMARY_MAX_CONTEXT_CHARS = env_int("SUMMARY_MAX_CONTEXT_CHARS", CHAT_MAX_CONTEXT_CHARS)
 
 # 前端资源根目录（index.html / logo.svg / static/）
 WEB_DIR = os.path.join(os.path.dirname(__file__), "web")
@@ -108,12 +112,18 @@ HISTORY_PAYLOAD_MAX_BYTES = env_int("HISTORY_PAYLOAD_MAX_BYTES", 10 * 1024 * 102
 # SV_ENABLED=0 可整体关闭声纹功能（不加载 SV 模型、匹配一律空、登记接口报 503）。
 SV_ENABLED = os.environ.get("SV_ENABLED", "1") not in ("0", "false", "False", "")
 SV_MODEL_ID = os.environ.get("SV_MODEL_ID", "iic/speech_campplus_sv_zh-cn_16k-common")
+# 说话人分离聚类合并阈值：funasr 1.2.6 内置 spk_model="cam++" 的 ClusterBackend 参数
+# merge_thr（两簇中心余弦相似度 >= 该值即合并）。内置 cam++ 本来就是**全局**聚类
+# （sv_chunk → 全局谱聚类 → merge_by_cos → 按时间重叠赋回 spk），并非“VAD 切片内各自聚类”，
+# 因此无需单独加载 diarization 模型。调低 → 更积极合并 → 说话人更少，用于抑制
+# “同一个人被拆成多个 spk”（可试 0.5~0.3）；调高 → 更保守 → 说话人更多（默认 0.78）。
+DIARIZE_MERGE_THR = env_float("DIARIZE_MERGE_THR", 0.8)
 # 余弦相似度匹配阈值：>= 阈值才算命中（需按实测分布校准，0.65 为经验中间值）
-VOICEPRINT_MATCH_THRESHOLD = env_float("VOICEPRINT_MATCH_THRESHOLD", 0.65)
+VOICEPRINT_MATCH_THRESHOLD = env_float("VOICEPRINT_MATCH_THRESHOLD", 0.5)
 # 每个说话人簇最多取几段最长语音拼成代表片段提向量（越多越稳但越慢）
 VOICEPRINT_MAX_SEGMENTS = env_int("VOICEPRINT_MAX_SEGMENTS", 3)
 # 单段短于此秒数则跳过（太短的语音提出的向量不可靠）
-VOICEPRINT_MIN_SEG_SECONDS = env_float("VOICEPRINT_MIN_SEG_SECONDS", 0.5)
+VOICEPRINT_MIN_SEG_SECONDS = env_float("VOICEPRINT_MIN_SEG_SECONDS", 1)
 # 登记音频上传大小上限（字节）；提完向量即丢弃，不落盘
 VOICEPRINT_SAMPLE_MAX_BYTES = env_int("VOICEPRINT_SAMPLE_MAX_BYTES", 20 * 1024 * 1024)
 
@@ -157,9 +167,21 @@ model = AutoModel(
     model=MODEL_ID,
     vad_model="fsmn-vad",
     # VAD 单段上限 30s：限制送进 Paraformer 的最长语音段，降低显存峰值
-    vad_kwargs={"max_single_segment_time": 30000},
-    punc_model="ct-punc",
+    vad_kwargs={
+        "max_single_segment_time": 60000,  # 改成60s，减少长发言被切碎；显存压力会小幅上涨，SeACo-Large 单段60s大部分10G+显卡可扛
+        "speech_noise_thres": 0.5, # 可选，调低到0.4对小声会议更友好；调高0.6过滤背景噪声
+        "max_end_silence_time": 800, # 静音800ms才切段，避免一句话中间频繁切小段；默认500ms容易切碎 
+        },
+    #punc_model="ct-punc",
+    punc_model="ct-punc-c",
+    # 说话人分离用内置 spk_model="cam++"：funasr 1.2.6 的 ClusterBackend 是**全局**聚类
+    # （sv_chunk 把全音频切成 1.5s/0.75s 重叠片 → 全局谱聚类 → merge_by_cos 合并 →
+    # 按时间重叠把 spk 赋回每条句子），并非“VAD 切片内各自聚类”，不存在分片错位问题。
+    # 因此不再单独加载 diarization 模型（iic/speech_campplus_speaker-diarization_common
+    # 是 ModelScope 管线模型，funasr 1.2.6 的 AutoModel 无法加载，会报 "is not registered"）。
+    # “同一个人被拆成多个 spk”的过分割用 spk_kwargs.cb_kwargs.merge_thr 调节（见 DIARIZE_MERGE_THR）。
     spk_model="cam++",
+    spk_kwargs={"cb_kwargs": {"merge_thr": DIARIZE_MERGE_THR}},
     device=DEVICE,
     disable_update=True,
 )
@@ -508,21 +530,24 @@ def _get_infer_lock() -> asyncio.Lock:
 
 
 # ASR 前音频预处理滤波链（识别前统一跑）：
+#   aformat=...          先重采样到 16k + 下混为单声道——让后面的滤镜在 16k 单声道上跑，
+#                        省 6× 数据量，也避免在立体声上归一化后再下混导致响度二次变化
 #   highpass=f=80        去掉 80Hz 以下低频隆隆声（空调/桌面震动/直流偏置）
 #   afftdn=nr=12         FFT 频域降噪，压制稳态背景噪声（12dB，偏保守不伤语音）
 #   acompressor          动态压缩，拉近远近发言人音量差，压制突发爆音
-#   loudnorm             EBU R128 响度归一化到 -16 LUFS，避免整体过轻/过响
+# 不再用 loudnorm：EBU R128 全曲响度归一近似两遍，占预处理 ~80% 时间；ASR 不需要广播级
+# 响度，acompressor 已做动态控制，且 loudnorm 的动态增益可能引入 pumping 伤识别。
 # 这些参数直接并入既有的转 16k/单声道那一步，不新增处理阶段。
 _ASR_AUDIO_FILTER = (
+    "aformat=sample_rates=16000:channel_layouts=mono,"
     "highpass=f=80,"
     "afftdn=nr=12,"
-    "acompressor=threshold=-20dB:ratio=3:attack=5:release=50,"
-    "loudnorm=I=-16:TP=-1.5:LRA=11"
+    "acompressor=threshold=-20dB:ratio=3:attack=5:release=50"
 )
 
 
 def _ensure_audio_input(file_path: str) -> "tuple[str, bool]":
-    """统一预处理：所有输入都经 ffmpeg 转 16k 单声道 WAV 并跑降噪/响度归一化滤波，
+    """统一预处理：所有输入都经 ffmpeg 转 16k 单声道 WAV 并跑降噪/动态压缩滤波，
     返回 (路径, 是否为临时文件)。ffmpeg 缺失或处理失败时降级为原文件直送
     （返回 (原路径, False)），保证音频预处理永不打断转写。"""
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
@@ -537,7 +562,7 @@ def _ensure_audio_input(file_path: str) -> "tuple[str, bool]":
             "-ac", "1", "-ar", "16000",
             "-y", tmp_path,
         ]
-        proc = subprocess.run(cmd, capture_output=True, timeout=300)
+        proc = subprocess.run(cmd, capture_output=True, timeout=600)
         if proc.returncode != 0:
             stderr = (proc.stderr or b"").decode("utf-8", "replace").strip()
             raise RuntimeError(stderr or f"ffmpeg 退出码 {proc.returncode}")
@@ -554,10 +579,21 @@ def _ensure_audio_input(file_path: str) -> "tuple[str, bool]":
 
 
 def _run_asr(tmp_path: str, hotword: str):
-    """同步执行一次 ASR 推理（在工作线程中调用，不得触碰事件循环）。"""
+    """同步执行一次 ASR 推理（在工作线程中调用，不得触碰事件循环）。
+
+    单次 model.generate(**kwargs)：主模型已挂内置 spk_model="cam++"，输出 sentence_info
+    自带**全局聚类**的 spk 字段，下游 _compute_speaker_matches 直接读它，无需二次处理。
+    force_time_shift 修正 Paraformer CIF 时间戳漂移，normalize_hotword 把热词清洗成
+    SeACo 期望的空格分隔单行文本。
+
+    回滚方案（若本改动异常，恢复以下即可）：
+      1. AutoModel 删除 spk_model 与 spk_kwargs；
+      2. 本函数删掉 force_time_shift 与热词清洗，回到最原始的
+         `return model.generate(input=..., hotword=...)`。
+    """
     audio_path, is_temp = _ensure_audio_input(tmp_path)
     try:
-        hw = hotword.strip()
+        hw = normalize_hotword(hotword)
         # 诊断：确认转写实际收到的热词字符串（SeACo 期望空格分隔的单行文本）
         print(f"[ASR] hotword={hw!r}  clas_scale={HOTWORD_CLAS_SCALE}  input={os.path.basename(tmp_path)}")
         # 长音频稳定性：动态 batch 从默认 300s 降到 60s，是显存 OOM 的头号控制项；
@@ -567,10 +603,13 @@ def _run_asr(tmp_path: str, hotword: str):
             hotword=hw,
             batch_size_s=150,
             batch_size_threshold_s=50,
+            # 修复 Paraformer CIF 时间戳漂移（经验值 -1.3s，使句段时间戳对齐真实语音）
+            force_time_shift=-1.3,
         )
         # 仅在确有热词时透传 clas_scale，避免无热词场景引入无谓参数
         if hw:
             kwargs["clas_scale"] = HOTWORD_CLAS_SCALE
+
         return model.generate(**kwargs)
     finally:
         if is_temp:
@@ -676,6 +715,20 @@ async def save_hotwords(payload: dict = Body(...)):
         return JSONResponse({"ok": True})
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+def _read_hotwords() -> str:
+    """读取系统配置的热词表（hotwords.txt），缺失/失败时返回空串。
+
+    供总结/问答等注入热词的路径复用；读取失败绝不阻断主流程（降级为无热词）。
+    """
+    try:
+        if os.path.exists(HOTWORDS_PATH):
+            with open(HOTWORDS_PATH, "r", encoding="utf-8") as f:
+                return f.read()
+    except Exception as e:
+        print(f"读取热词表失败，忽略：{e}")
+    return ""
 
 
 # ---------- 通讯录（联系人 + 声纹）登记 + 管理 ----------
@@ -1103,11 +1156,12 @@ async def summarize(payload: dict = Body(...)):
     body = {
         "model": LLM_MODEL,
         "messages": build_summary_messages(
-            meta, segments, budget=CHAT_MAX_CONTEXT_CHARS, speaker_map=speaker_map
+            meta, segments, budget=SUMMARY_MAX_CONTEXT_CHARS, speaker_map=speaker_map,
+            hotwords=_read_hotwords(),
         ),
         "temperature": 0.2,  # 低温：抑制 JSON 漂移，保持总结稳定
-        # 详实总结（多发言人、每人多要点）输出较长，给足空间避免 JSON 被截断解析失败
-        "max_tokens": 4096,
+        # 详实总结（议题 + 多发言人×多要点 + 决议）输出较长，给足空间避免 JSON 被截断解析失败
+        "max_tokens": 8192,
         "stream": False,
     }
     url = f"{LLM_BASE_URL}/v1/chat/completions"

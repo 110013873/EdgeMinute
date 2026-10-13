@@ -72,7 +72,7 @@ export const redoStack = [];
 export const UNDO_LIMIT = 60;
 
 // 会议总结各板块展开态 + 发言人配色
-export const summaryOpen = { overview: true, speakers: true, resolutions: true };
+export const summaryOpen = { overview: true, topics: true, speakers: true, resolutions: true };
 export const summarySpeakerColors = {};
 
 // 归一化外来 meta（旧会话 / 导入结果 / 历史恢复）：兼容字符串型 attendees、剔除 host
