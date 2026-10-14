@@ -95,7 +95,7 @@ sudo ./deploy/install.sh --skip-setup
 sudo ./deploy/install.sh --port 8899 --venv /opt/funasr-env --user edgeminute
 
 # LLM 调优：上下文长度 / 量化档位（显存吃紧时调小 ctx）
-sudo ./deploy/install.sh --llm-ctx 32768 --llm-quant Q4_K_M
+sudo ./deploy/install.sh --llm-ctx 40960 --llm-quant Q4_K_M
 ```
 
 > **默认自带本地 LLM。** 安装脚本会编译 llama.cpp、下载 Qwen3 GGUF 模型（约数十 GB）并随 web

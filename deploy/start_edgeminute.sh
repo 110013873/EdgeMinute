@@ -23,7 +23,7 @@
 #   EDGEMINUTE_LLM      — 1 to launch the local LLM, 0/empty to skip it
 #   EDGEMINUTE_LLM_BIN  — path to llama-server
 #   EDGEMINUTE_LLM_MODEL— path to the .gguf model
-#   EDGEMINUTE_LLM_CTX  — context length        (default: 32768)
+#   EDGEMINUTE_LLM_CTX  — context length        (default: 40960)
 #   EDGEMINUTE_LLM_PORT — llama-server port      (default: 8080)
 #
 set -euo pipefail
@@ -53,7 +53,7 @@ trap cleanup EXIT INT TERM
 if [[ "${EDGEMINUTE_LLM:-0}" == "1" ]]; then
   LLM_BIN="${EDGEMINUTE_LLM_BIN:-}"
   LLM_MODEL="${EDGEMINUTE_LLM_MODEL:-}"
-  LLM_CTX="${EDGEMINUTE_LLM_CTX:-32768}"
+  LLM_CTX="${EDGEMINUTE_LLM_CTX:-40960}"
   LLM_PORT="${EDGEMINUTE_LLM_PORT:-8080}"
   if [[ -x "$LLM_BIN" && -f "$LLM_MODEL" ]]; then
     echo "[edgeminute] starting local LLM: $LLM_BIN (port $LLM_PORT, ctx $LLM_CTX)" >&2

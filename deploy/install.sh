@@ -25,7 +25,7 @@
 #   --user NAME       systemd service User=     (default: the invoking user)
 #   --port N          web service port          (default: 8899)
 #   --llm-port N      LLM server port           (default: 8080)
-#   --llm-ctx N       LLM context length        (default: 32768)
+#   --llm-ctx N       LLM context length        (default: 40960)
 #   --llm-quant TAG   LLM GGUF quantization tag (default: Q4_K_M)
 #   -h | --help       show this help
 #
@@ -46,7 +46,7 @@ USER_HOME="$(getent passwd "$SERVICE_USER" | cut -d: -f6)"; USER_HOME="${USER_HO
 VENV_DIR="${VENV_DIR:-${USER_HOME}/funasr-env}"
 WEB_PORT=8899
 LLM_PORT=8080
-LLM_CTX=32768
+LLM_CTX=40960
 LLM_QUANT="Q4_K_M"
 WITH_LLM=1
 SKIP_SETUP=0

@@ -28,7 +28,7 @@ MS_REPO="unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF"
 QUANT="Q4_K_M"
 
 SERVER_PORT=8080
-CONTEXT_SIZE=32768   # 32K 上下文，覆盖大多数会议转写；显存/内存吃紧可以调小
+CONTEXT_SIZE=40960   # 40K 上下文，覆盖大多数会议转写；显存/内存吃紧可以调小
 
 SKIP_BUILD=0
 NO_START=0
